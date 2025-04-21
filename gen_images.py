@@ -91,7 +91,7 @@ def noise_to_images(
     device: torch.device,
     num_images: int = 1,
 ):
-    """Generate a single image using the generator G.
+    """Generate images from the generator using a random seed.
     Args:
         G: The generator model.
         seed: Random seed for generating the latent vector.
