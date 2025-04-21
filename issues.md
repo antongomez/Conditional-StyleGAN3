@@ -54,13 +54,15 @@ RuntimeError: Pin memory thread exited unexpectedly
 
 This error is related to the `pin_memory` option in PyTorch. When this option is set to `True`, PyTorch will use a separate thread to copy data from the CPU to the GPU. If this thread exits unexpectedly, you will see this error.
 
+I haven't found this error any more.
+
 ## Issue 5: Tensorboard
 
-I don't know why have I changed the code to start and finish tensorboar. I have to try to run it again as it was in a first moment. I suppose it has to work (I have to check it). Now, it seems that I am seeing the tensorboard associated to the previous training (thta doesn't finish properly).
+I don't know why have I changed the code to start and finish tensorboard. I have to try to run it again as it was in a first moment. I suppose it has to work (I have to check it). Now, it seems that tensorboard is not able to open the running directory. I think it is a cleaner option to make an script appart to run tensorboard and not to mix it with the training script.
 
 # Notes
 
-## Note 1: Fisrt training output
+## Note 1: First training output (MNIST)
 
 I run a first training and the output was:
 
@@ -119,9 +121,9 @@ image_snapshot_ticks=50,    # How often to save image snapshots? None = disable.
 network_snapshot_ticks=50,  # How often to save network snapshots? None = disable.
 ```
 
-## Note 2: Second training output
+## Note 2: Second training output (MNIST)
 
-the first observation is that if we increase the batch size, the time per kimg is reduced significantly from 239.02 sec/kimg to 53.82 sec/kimg. Also, it is important to note that the gpu memory reserved is bigger, 17.74GB (near to our limit of 24 GB). I'm not sure if we can increase the batch size to 128, so I will keep it at 64. The output is in the first folder of `training-runs/MNIST`.
+The first observation is that if we increase the batch size, the time per kimg is reduced significantly from 239.02 sec/kimg to 53.82 sec/kimg. Also, it is important to note that the gpu memory reserved is bigger, 17.74GB (near to our limit of 24 GB). I'm not sure if we can increase the batch size to 128, so I will keep it at 64. The output is in the first folder of `training-runs/MNIST`.
 
 ## Note 3: Developed util code
 
@@ -139,3 +141,38 @@ python train.py --outdir=./training-runs/MNIST --cfg=stylegan3-t --data=data/mni
   --kimg=3100 --tick=10 --snap=5 --metrics=none \
   --mirror=False --aug=noaug
 ```
+
+## Note 5: Network for classification
+
+To adapt the network to the classification task, I need to modify the output of the discriminator. The discriminator’s code is in the file `networks_stylegan2`. Specifically, I have to adjust the output of the `DiscriminatorEpilogue` block to return both the logits and the **pre_logits**.
+
+The **pre_logits** are the outputs of the discriminator after the convolutional and dense layers, but before multiplying them by the conditioned vector (the one-hot vector associated with the class of each image in the batch).
+
+The logits are computed as the dot product between the **pre_logits** and the mapped one-hot vector associated with the real class of each image. These logits indicate how "real" an image is — higher values suggest greater realism.
+
+To compute the predicted class, I map each one-hot vector associated with every class in the dataset and compute its dot product with the **pre_logits**. This result is divided by the square root of the number of classes to mitigate the risk of exploding gradients. However, it’s important to note that this scaling step isn't strictly necessary here, since we only need to determine which class is most "real". Scaling all values by the same factor doesn’t affect the result of an `argmax` operation.
+
+In summary, the discriminator outputs:
+
+- The **logits**: the dot product between the **pre_logits** and the mapped conditioned vector of the actual class of each image.
+- The dot product between the **pre_logits** and the mapped conditioned vectors of all classes.
+
+This provides a value per class for each element in the batch, enabling class prediction via the `argmax` function.
+
+### Compute Accuracy
+
+To compute train accuracy, I needed to modify the file `loss.py`. In this file, during the phases `"Dmain"`, `"Dreg"` or `"Dboth"` — when the discriminator is being trained (and not the generator) — I compute the `argmax` to determine which images were correctly classified by class, in order to compute the average accuracy. More information would be needed to compute a confusion matrix.
+
+This functionality is implemented in the function `classification_results_per_class`. This function computes a vector for each class containing a `1` if the image was correctly classified and a `0` if it was not. This information is then stored using the `report` method from the `training_stats` file.
+
+At the end of each tick, the `update` method computes all the moments:
+
+- **Moment 1**: counts how many entries there are (in the case of accuracy per class, how many images were classified as this class).
+- **Moment 2**: sums all the entries (how many of those classifications were correct).
+- **Moment 3**: sums the squares of the entries (how many of those classifications were correct squared).
+
+## Note 6: Training with Oitaven RGB
+
+I created a script called `extract_patches` to extract RGB patches from the multispectral image of the Oitavén River. Once the patches are extracted, it is necessary to run the script `dataset_tool.py` to create the dataset.
+
+The `dataset_tool.py` script generates a zip file containing the extracted patches. This zip file can then be used to train the model.
