@@ -1,0 +1,14 @@
+*__pycache__/
+
+# Ignore data files
+data/
+
+# Ignore train results
+training-runs/
+
+# Ignore trained networks
+networks/
+*.pkl
+
+# Ignore generated images
+out/
