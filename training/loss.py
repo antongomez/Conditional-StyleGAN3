@@ -27,7 +27,7 @@ class Loss:
 # ----------------------------------------------------------------------------
 
 
-def classification_results_per_class(predictions, ground_truth):
+def compute_class_prediction_accuracy(predictions, ground_truth):
     """
     Computes a tensor per class with 1 for correctly classified instances
     and 0 for incorrectly classified instances.
@@ -56,9 +56,52 @@ def classification_results_per_class(predictions, ground_truth):
         correct_tensor = (class_predictions == class_ground_truth).float().unsqueeze(1)
 
         # Store the tensor in the dictionary
-        results_per_class[cls] = correct_tensor
+        results_per_class[cls] = correct_tensor.squeeze(1)
 
     return results_per_class
+
+
+def compute_confusion_matrix_dict(predictions, ground_truth):
+    """
+    Computes a confusion matrix in dictionary format.
+
+    Args:
+        predictions (torch.Tensor): Tensor of size (batch_size, dim_label) with predicted values.
+        ground_truth (torch.Tensor): Tensor of size (batch_size,) with ground truth labels.
+
+    Returns:
+        dict: Dictionary where each key is "Classification/{real_class}/{predicted_class}"
+              and the value is a tensor with 1s for each instance where the prediction matches
+              the real class and 0s otherwise.
+    """
+    # Get predicted classes and ground truth classes
+    predicted_classes = torch.argmax(predictions, dim=1)
+    ground_truth_classes = torch.argmax(ground_truth, dim=1)
+
+    # Initialize the confusion matrix dictionary
+    confusion_matrix_dict = {}
+
+    # Iterate over all possible real and predicted classes
+    num_classes = predictions.shape[1]
+    for real_class in range(num_classes):
+        for predicted_class in range(num_classes):
+            # Mask for instances where the real class matches `real_class`
+            real_mask = ground_truth_classes == real_class
+
+            # Mask for instances where the predicted class matches `predicted_class`
+            predicted_mask = predicted_classes == predicted_class
+
+            # Combine masks to find instances where real_class and predicted_class match
+            combined_mask = real_mask & predicted_mask
+
+            # Create a tensor with 1s for matching instances and 0s otherwise
+            confusion_tensor = combined_mask.float().unsqueeze(1)
+
+            # Store the tensor in the dictionary
+            key = f"Classification/{real_class}/{predicted_class}"
+            confusion_matrix_dict[key] = confusion_tensor.squeeze(1)
+
+    return confusion_matrix_dict
 
 
 class StyleGAN2Loss(Loss):
@@ -187,9 +230,13 @@ class StyleGAN2Loss(Loss):
                 training_stats.report("Loss/scores/real", real_logits)
                 training_stats.report("Loss/signs/real", real_logits.sign())
                 # Compute classification results per class
-                results_per_class = classification_results_per_class(real_logits_all_classes, real_c)
+                results_per_class = compute_class_prediction_accuracy(real_logits_all_classes, real_c)
                 for cls, classification_tensor in results_per_class.items():
-                    training_stats.report(f"Loss/classification/{cls}", classification_tensor)
+                    training_stats.report(f"Accuracy/{cls}", classification_tensor)
+                # Compute confusion matrix
+                confusion_matrix_dict = compute_confusion_matrix_dict(real_logits_all_classes, real_c)
+                for key, confusion_tensor in confusion_matrix_dict.items():
+                    training_stats.report(key, confusion_tensor)
 
                 loss_Dreal = 0
                 if phase in ["Dmain", "Dboth"]:

@@ -124,7 +124,7 @@ def main(input_dir, output_dir, filename):
         patch_img = Image.fromarray((rgb_patch.permute(1, 2, 0).numpy() * 255).astype(np.uint8))
 
         # Save patch in the corresponding class folder
-        class_label = truth[center]
+        class_label = truth[center] - 1  # Adjust class label to be zero-indexed
         class_dir = os.path.join(output_dir, f"{class_label:05d}")
         if not os.path.exists(class_dir):
             os.makedirs(class_dir)

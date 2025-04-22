@@ -163,7 +163,7 @@ This provides a value per class for each element in the batch, enabling class pr
 
 To compute train accuracy, I needed to modify the file `loss.py`. In this file, during the phases `"Dmain"`, `"Dreg"` or `"Dboth"` — when the discriminator is being trained (and not the generator) — I compute the `argmax` to determine which images were correctly classified by class, in order to compute the average accuracy. More information would be needed to compute a confusion matrix.
 
-This functionality is implemented in the function `classification_results_per_class`. This function computes a vector for each class containing a `1` if the image was correctly classified and a `0` if it was not. This information is then stored using the `report` method from the `training_stats` file.
+This functionality is implemented in the function `compute_class_prediction_accuracy`. This function computes a vector for each class containing a `1` if the image was correctly classified and a `0` if it was not. This information is then stored using the `report` method from the `training_stats` file.
 
 At the end of each tick, the `update` method computes all the moments:
 
