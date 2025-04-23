@@ -74,7 +74,7 @@ def select_patch(data, patch_size_x, patch_size_y, x, y):
 # -----------------------------------------------------------------
 
 
-def main(input_dir, output_dir, filename):
+def main(input_dir, output_dir, filename, rgb):
     # Construct input file paths
     raw_file = os.path.join(input_dir, f"{filename}.raw")
     gt_file = os.path.join(input_dir, f"{filename}.pgm")
@@ -117,20 +117,28 @@ def main(input_dir, output_dir, filename):
 
         # Extract patch
         patch = select_patch(data, PATCH_SIZE, PATCH_SIZE, x, y)
-        rgb_patch = torch.index_select(patch, dim=0, index=torch.tensor([2, 1, 0]))
-
-        # Normalize the patch to [0, 1]
-        rgb_patch = (rgb_patch - rgb_patch.min()) / (rgb_patch.max() - rgb_patch.min())
-        patch_img = Image.fromarray((rgb_patch.permute(1, 2, 0).numpy() * 255).astype(np.uint8))
+        if rgb:
+            rgb_patch = torch.index_select(patch, dim=0, index=torch.tensor([2, 1, 0]))
+            # Normalize the patch to [0, 1]
+            rgb_patch = (rgb_patch - rgb_patch.min()) / (rgb_patch.max() - rgb_patch.min())
+            patch_img = Image.fromarray((rgb_patch.permute(1, 2, 0).numpy() * 255).astype(np.uint8))
+        else:
+            # Normalize the patch to [0, 1]
+            patch = (patch - patch.min()) / (patch.max() - patch.min())
+            patch_img = patch.permute(1, 2, 0).numpy()
+            patch_img = (patch_img * 255).astype(np.uint8)
 
         # Save patch in the corresponding class folder
         class_label = truth[center] - 1  # Adjust class label to be zero-indexed
         class_dir = os.path.join(output_dir, f"{class_label:05d}")
         if not os.path.exists(class_dir):
             os.makedirs(class_dir)
-        patch_filename = f"img{idx:08d}.png"
+        patch_filename = f"img{idx:08d}.png" if rgb else f"img{idx:08d}.npy"
         patch_path = os.path.join(class_dir, patch_filename)
-        patch_img.save(patch_path)
+        if rgb:
+            patch_img.save(patch_path)
+        else:
+            np.save(patch_path, patch_img)
 
         # Add the patch path and label to the labels list
         relative_path = os.path.relpath(patch_path, output_dir)
@@ -165,6 +173,12 @@ if __name__ == "__main__":
         default="oitaven",
         help="Base filename (without extension) of the raw, pgm, and segment center files",
     )
+    parser.add_argument(
+        "--rgb",
+        action="store_true",
+        default=False,
+        help="Whether to save the patches as RGB images",
+    )
     args = parser.parse_args()
 
-    main(args.input_dir, args.output_dir, args.filename)
+    main(args.input_dir, args.output_dir, args.filename, args.rgb)
