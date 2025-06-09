@@ -88,7 +88,7 @@ I'm not sure what this error means, and why it appeared. However, the training w
 
 ### Conclusions
 
-- The part of the training thta took the most time was the evaluation of the metrics `fid50k_full`.
+- The part of the training that took the most time was the evaluation of the metrics `fid50k_full`.
 - Each tick took ~15 minutes (~4 minutes each kimg).
 - It seems that the GPU memory is stable (9.79 GB). Therefore, the memory of the server GPUs should not be a problem (we have 24 GB per GPU).
 - The CPU memory does not seem to be a problem, since most of the time is occupied in `cpumem 3.87` and we have 128 GB of RAM.
@@ -129,7 +129,19 @@ The first observation is that if we increase the batch size, the time per kimg i
 
 I have added some functionality to `gen_images.py` to generate a grid of images. However I tried to keep the original functionality. Therefore, if you call the script with the same arguments as before, it will work as before. The only difference is that now you can also generate a grid of images using the `--classes` flag that works very similar to `--seeds` flag. In this case, we will use a seed for each class and we will generate the same number of images per class as the number of classes (to ensure the grid is square).
 
-Also, I'm trying to develop a util notebook to analyze the metrics of the training.
+Examples of usage:
+
+- Generates a grid of images for classes 1 to 10, using seeds 1 to 10, and saves the output in the specified directory:
+
+```bash
+python gen_images.py --network=training-runs/OITAVEN/00000-stylegan3-t-oitaven-gpus2-batch64-gamma0.125/network-snapshot-001081.pkl --classes=1-10 --seeds=1-10 --outdir=out/00000-oitaven-001081
+```
+
+- Generates 10 images of class 0, using seeds 1 to 10, and saves the output in the specified directory:
+
+```bash
+python gen_images.py --network=training-runs/OITAVEN/00000-stylegan3-t-oitaven-gpus2-batch64-gamma0.125/network-snapshot-001081.pkl --class=0 --seeds=1-10 --outdir=out/00000-oitaven-001081
+```
 
 ## Note 4: Launching another training
 
@@ -175,4 +187,24 @@ At the end of each tick, the `update` method computes all the moments:
 
 I created a script called `extract_patches` to extract RGB patches from the multispectral image of the Oitavén River. Once the patches are extracted, it is necessary to run the script `dataset_tool.py` to create the dataset.
 
-The `dataset_tool.py` script generates a zip file containing the extracted patches. This zip file can then be used to train the model.
+To extract patches from a multispectral image using the `extract_patches.py` script, you need to provide the following parameters:
+
+- `--input`: Path to the folder that contains the multispectral image, the ground truth file, and the segmented image centers.
+- `--filename`: The base name of the files (without extensions). The script expects:
+  - Multispectral image: `{filename}.raw`
+  - Ground truth: `{filename}.pgm`
+  - Centers: `seg_{filename}_wp_centers.raw`
+
+### Examples of usage
+
+- Extract **multiespectral patches** from the multispectral image of the Oitavén River. They are stored as numpy objects in the `data/oitaven/patches/` directory grouped by class. It is also generated a json with only one entry, `labels` that consist in an array mapping each patch to its class.
+
+```bash
+python extract_patches.py --input=data/oitaven/ --output=data/oitaven/patches/ --filename=oitaven
+```
+
+- Extract **RGB patches** from the multispectral image of the Oitavén River.
+
+```bash
+python extract_patches.py --input=data/oitaven/ --output=data/oitaven/patches/ --filename=oitaven --rgb
+```
