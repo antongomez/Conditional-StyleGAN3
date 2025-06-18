@@ -75,6 +75,11 @@ def launch_training(c, desc, outdir, dry_run):
     print(f'Dataset resolution:  {c.training_set_kwargs.resolution}')
     print(f'Dataset labels:      {c.training_set_kwargs.use_labels}')
     print(f'Dataset x-flips:     {c.training_set_kwargs.xflip}')
+    if c.validation_set_kwargs.path:
+        print(f'Validation path:     {c.validation_set_kwargs.path}')
+        print(f'Validation size:     {c.validation_set_kwargs.max_size} images')
+        print(f'Validation labels:   {c.validation_set_kwargs.use_labels}')
+        print(f'Validation x-flips:  {c.validation_set_kwargs.xflip}')
     print()
 
     # Dry run?
@@ -127,6 +132,7 @@ def parse_comma_separated_list(s):
 @click.option('--outdir',       help='Where to save the results', metavar='DIR',                required=True)
 @click.option('--cfg',          help='Base configuration',                                      type=click.Choice(['stylegan3-t', 'stylegan3-r', 'stylegan2']), required=True)
 @click.option('--data',         help='Training data', metavar='[ZIP|DIR]',                      type=str, required=True)
+@click.option('--data-val',     help='Validation data', metavar='[ZIP|DIR]',                    type=str, default="", show_default=True)
 @click.option('--gpus',         help='Number of GPUs to use', metavar='INT',                    type=click.IntRange(min=1), required=True)
 @click.option('--batch',        help='Total batch size', metavar='INT',                         type=click.IntRange(min=1), required=True)
 @click.option('--gamma',        help='R1 regularization weight', metavar='FLOAT',               type=click.FloatRange(min=0), required=True)
@@ -196,10 +202,13 @@ def main(**kwargs):
 
     # Training set.
     c.training_set_kwargs, dataset_name = init_dataset_kwargs(data=opts.data)
+    c.validation_set_kwargs, _ = init_dataset_kwargs(data=opts.data_val) if opts.data_val else dnnlib.EasyDict(path="", use_labels=True, max_size=None, xflip=False)
     if opts.cond and not c.training_set_kwargs.use_labels:
         raise click.ClickException('--cond=True requires labels specified in dataset.json')
     c.training_set_kwargs.use_labels = opts.cond
     c.training_set_kwargs.xflip = opts.mirror
+    c.validation_set_kwargs.use_labels = opts.cond
+    c.validation_set_kwargs.xflip = opts.mirror
 
     # Hyperparameters & settings.
     c.num_gpus = opts.gpus

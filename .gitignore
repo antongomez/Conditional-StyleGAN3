@@ -12,3 +12,9 @@ networks/
 
 # Ignore generated images
 out/
+
+# Ignore scripts to run jobs in slurm and outputs
+run_job.sh
+job_outputs/
+*.err
+*.out

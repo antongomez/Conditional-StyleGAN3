@@ -831,6 +831,7 @@ class DiscriminatorEpilogue(torch.nn.Module):
         mbstd_num_channels=1,  # Number of features for the minibatch standard deviation layer, 0 = disable.
         activation="lrelu",  # Activation function: 'relu', 'lrelu', etc.
         conv_clamp=None,  # Clamp the output of convolution layers to +-X, None = disable clamping.
+        output_dim=1,  # Output dimensionality for classification (number of classes)
     ):
         assert architecture in ["orig", "skip", "resnet"]
         super().__init__()
@@ -853,6 +854,10 @@ class DiscriminatorEpilogue(torch.nn.Module):
         self.fc = FullyConnectedLayer(in_channels * (resolution**2), in_channels, activation=activation)
         self.out = FullyConnectedLayer(in_channels, 1 if cmap_dim == 0 else cmap_dim)
 
+        self.classification_out = (
+            FullyConnectedLayer(in_channels, output_dim, activation="linear", bias_init=0.0) if output_dim > 0 else None
+        )
+
     def forward(self, x, img, cmap, force_fp32=False):
         misc.assert_shape(x, [None, self.in_channels, self.resolution, self.resolution])  # [NCHW]
         _ = force_fp32  # unused
@@ -871,16 +876,23 @@ class DiscriminatorEpilogue(torch.nn.Module):
             x = self.mbstd(x)
         x = self.conv(x)
         x = self.fc(x.flatten(1))
-        pre_logits = self.out(x)
+        logits = self.out(x)
 
-        # Conditioning.
+        # Conditioning for real/fake classification.
         if self.cmap_dim > 0:
             misc.assert_shape(cmap, [None, self.cmap_dim])
-            logits = (pre_logits * cmap).sum(dim=1, keepdim=True) * (1 / np.sqrt(self.cmap_dim))
+            conditioned_logits = (logits * cmap).sum(dim=1, keepdim=True) * (1 / np.sqrt(self.cmap_dim))
 
-        assert logits.dtype == dtype
-        assert pre_logits.dtype == dtype
-        return logits, pre_logits
+        # Classification output.
+        if self.classification_out is not None:
+            classification_logits = self.classification_out(x)
+            assert classification_logits.shape[1] == self.classification_out.out_features
+            assert classification_logits.dtype == dtype
+        else:
+            classification_logits = None
+
+        assert conditioned_logits.dtype == dtype
+        return conditioned_logits, classification_logits
 
     def extra_repr(self):
         return f"resolution={self.resolution:d}, architecture={self.architecture:s}"
@@ -947,7 +959,7 @@ class Discriminator(torch.nn.Module):
             channels_dict[4], cmap_dim=cmap_dim, resolution=4, **epilogue_kwargs, **common_kwargs
         )
 
-    def forward(self, img, c, update_emas=False, compute_all_logits=False, **block_kwargs):
+    def forward(self, img, c, update_emas=False, **block_kwargs):
         _ = update_emas  # unused
         x = None
         for res in self.block_resolutions:
@@ -957,25 +969,9 @@ class Discriminator(torch.nn.Module):
         cmap = None
         if self.c_dim > 0:
             cmap = self.mapping(None, c)
-        logits, pre_logits = self.b4(x, img, cmap)
+        conditioned_logits, classification_logits = self.b4(x, img, cmap)
 
-        # compute the dot porduct between the image in the latent space (pre_logits) and
-        # every mapped label vector (in one hot encoding) to get
-        if self.c_dim > 0 and compute_all_logits:
-            class_logits_list = []
-            for class_id in range(self.c_dim):
-                c = torch.nn.functional.one_hot(torch.tensor(class_id), num_classes=self.c_dim)
-                c = c.unsqueeze_(0).repeat(pre_logits.shape[0], 1)
-                c = c.to(pre_logits.device)
-                c = c.to(pre_logits.dtype)
-                cmap = self.mapping(None, c)
-                class_logits = torch.sum(pre_logits * cmap, dim=1, keepdim=True) * (1 / np.sqrt(self.c_dim))
-                class_logits_list.append(class_logits)
-            logits_all_classes = torch.cat(class_logits_list, dim=1)
-        else:
-            logits_all_classes = None
-
-        return logits, logits_all_classes
+        return conditioned_logits, classification_logits
 
     def extra_repr(self):
         return f"c_dim={self.c_dim:d}, img_resolution={self.img_resolution:d}, img_channels={self.img_channels:d}"

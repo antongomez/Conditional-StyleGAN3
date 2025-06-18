@@ -2,7 +2,9 @@
 
 # Default values
 EPOCHS=0
-DATASET="oitaven"
+DATASET="oitaven_train"
+DATSET_VAL="oitaven_val"
+GPUS=1 
 
 # Parse arguments
 for arg in "$@"; do
@@ -15,6 +17,14 @@ for arg in "$@"; do
       DATASET="${arg#*=}"
       shift
       ;;
+    --dataset-val=*)
+      DATSET_VAL="${arg#*=}"
+      shift
+      ;;
+    --gpus=*)
+      GPUS="${arg#*=}"
+      shift
+      ;;
     *)
       OTHER_ARGS+="$arg "
       ;;
@@ -23,9 +33,12 @@ done
 
 # Paths
 DATASET_ZIP="data/${DATASET}.zip"
+DATASET_VAL_ZIP="data/${DATSET_VAL}.zip"
 DATASET_TMP_DIR="data/tmp"
 DATASET_JSON="${DATASET_TMP_DIR}/dataset.json"
 OUTDIR="./training-runs/$(echo ${DATASET} | tr '[:lower:]' '[:upper:]')"
+BATCH=64
+BATCH_GPU=$(( BATCH / GPUS ))
 
 # Calculate kimg if epochs are specified
 if [ "$EPOCHS" -gt 0 ]; then
@@ -65,6 +78,6 @@ fi
 
 # Run training
 python train.py --outdir="$OUTDIR" --cfg=stylegan3-t --data="$DATASET_ZIP" --cond=True \
-  --gpus=2 --batch=64 --gamma=0.125 --batch-gpu=32 \
+  --gpus=$GPUS --batch=$BATCH --gamma=0.125 --batch-gpu=$BATCH_GPU \
   --kimg=$NUM_KIMG --tick=10 --snap=5 --metrics=none \
-  --mirror=False --aug=noaug $OTHER_ARGS
+  --mirror=False --aug=noaug --data-val=$DATASET_VAL_ZIP $OTHER_ARGS

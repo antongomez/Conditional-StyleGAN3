@@ -22,6 +22,7 @@ from torch_utils import misc
 from torch_utils import training_stats
 from torch_utils.ops import conv2d_gradfix
 from torch_utils.ops import grid_sample_gradfix
+from torch.utils.data.distributed import DistributedSampler
 
 import legacy
 from metrics import metric_main
@@ -99,6 +100,7 @@ def save_image_grid(img, fname, drange, grid_size):
 def training_loop(
     run_dir=".",  # Output directory.
     training_set_kwargs={},  # Options for training set.
+    validation_set_kwargs={},  # Options for validation set.
     data_loader_kwargs={},  # Options for torch.utils.data.DataLoader.
     G_kwargs={},  # Options for generator network.
     D_kwargs={},  # Options for discriminator network.
@@ -153,6 +155,23 @@ def training_loop(
             dataset=training_set, sampler=training_set_sampler, batch_size=batch_size // num_gpus, **data_loader_kwargs
         )
     )
+    # Load validation set
+    validation_set = dnnlib.util.construct_class_by_name(
+        **validation_set_kwargs
+    )  # subclass of training.dataset.Dataset
+    validation_set_sampler = DistributedSampler(
+        validation_set,
+        num_replicas=num_gpus,
+        rank=rank,
+        shuffle=False,
+    )  # no need to shuffle nor an infinite sampler for validation
+    validation_set_iterator = torch.utils.data.DataLoader(
+        dataset=validation_set,
+        sampler=validation_set_sampler,
+        batch_size=batch_size // num_gpus,
+        **data_loader_kwargs,
+    )
+
     if rank == 0:
         print()
         print("Num images: ", len(training_set))
@@ -166,6 +185,9 @@ def training_loop(
     common_kwargs = dict(
         c_dim=training_set.label_dim, img_resolution=training_set.resolution, img_channels=training_set.num_channels
     )
+    # Add output_dim to epilogue_kwargs to perform classification
+    D_kwargs.epilogue_kwargs.output_dim = training_set.label_shape[0] if training_set.has_labels else 0
+
     G = (
         dnnlib.util.construct_class_by_name(**G_kwargs, **common_kwargs).train().requires_grad_(False).to(device)
     )  # subclass of torch.nn.Module
@@ -441,6 +463,19 @@ def training_loop(
             if rank == 0:
                 with open(snapshot_pkl, "wb") as f:
                     pickle.dump(snapshot_data, f)
+
+        # Evaluate validation set.
+        if rank == 0:
+            print("Evaluating validation set...", end=" ")
+        with torch.no_grad():
+            for val_real_img, val_real_c in validation_set_iterator:
+                val_real_img = (val_real_img.to(device).to(torch.float32) / 127.5 - 1).split(batch_gpu)
+                val_real_c = val_real_c.to(device).split(batch_gpu)
+
+                for real_img, real_c in zip(val_real_img, val_real_c):
+                    loss.evaluate_discriminator(real_img=real_img, real_c=real_c)
+        if rank == 0:
+            print("Finished!")
 
         # Evaluate metrics.
         if (snapshot_data is not None) and (len(metrics) > 0):
