@@ -231,7 +231,7 @@ class StyleGAN2Loss(Loss):
                 training_stats.report("Loss/signs/real", real_conditioned_logits.sign())
 
                 # Compute classification results per class (only reporting)
-                if phase in ["Dmain", "Dboth"]:
+                if phase in ["Dmain", "Dboth"] and real_logits is not None:
                     results_per_class = compute_class_prediction_accuracy(real_logits, real_c)
                     for cls, classification_tensor in results_per_class.items():
                         training_stats.report(f"Accuracy/{cls}", classification_tensor)
@@ -245,9 +245,10 @@ class StyleGAN2Loss(Loss):
                 if phase in ["Dmain", "Dboth"]:
                     loss_Dreal = torch.nn.functional.softplus(-real_conditioned_logits)  # -log(sigmoid(real_logits))
                     training_stats.report("Loss/D/adversarial", loss_Dgen + loss_Dreal)
-                    loss_cls_real = torch.nn.functional.cross_entropy(real_logits, real_c.argmax(dim=1))
-                    training_stats.report("Loss/D/classification/real", loss_cls_real)
-                    loss_Dreal = loss_Dreal + self.class_weight * loss_cls_real
+                    if real_logits is not None:
+                        loss_cls_real = torch.nn.functional.cross_entropy(real_logits, real_c.argmax(dim=1))
+                        training_stats.report("Loss/D/classification/real", loss_cls_real)
+                    loss_Dreal = loss_Dreal + self.class_weight * loss_cls_real # 0 if no classification loss
                     training_stats.report("Loss/D/loss", loss_Dreal)
 
                 loss_Dr1 = 0

@@ -186,8 +186,7 @@ def training_loop(
         c_dim=training_set.label_dim, img_resolution=training_set.resolution, img_channels=training_set.num_channels
     )
     # Add output_dim to epilogue_kwargs to perform classification
-    # D_kwargs.epilogue_kwargs.output_dim = training_set.label_shape[0] if training_set.has_labels else 0
-    D_kwargs.epilogue_kwargs.output_dim = 0
+    D_kwargs.epilogue_kwargs.output_dim = training_set.label_shape[0] if training_set.has_labels and loss_kwargs.class_weight > 0 else 0
 
     G = (
         dnnlib.util.construct_class_by_name(**G_kwargs, **common_kwargs).train().requires_grad_(False).to(device)
@@ -466,17 +465,18 @@ def training_loop(
                     pickle.dump(snapshot_data, f)
 
         # Evaluate validation set.
-        if rank == 0:
-            print("Evaluating validation set...", end=" ")
-        with torch.no_grad():
-            for val_real_img, val_real_c in validation_set_iterator:
-                val_real_img = (val_real_img.to(device).to(torch.float32) / 127.5 - 1).split(batch_gpu)
-                val_real_c = val_real_c.to(device).split(batch_gpu)
+        if loss_kwargs.class_weight > 0:
+            if rank == 0:
+                print("Evaluating validation set...", end=" ")
+            with torch.no_grad():
+                for val_real_img, val_real_c in validation_set_iterator:
+                    val_real_img = (val_real_img.to(device).to(torch.float32) / 127.5 - 1).split(batch_gpu)
+                    val_real_c = val_real_c.to(device).split(batch_gpu)
 
-                for real_img, real_c in zip(val_real_img, val_real_c):
-                    loss.evaluate_discriminator(real_img=real_img, real_c=real_c)
-        if rank == 0:
-            print("Finished!")
+                    for real_img, real_c in zip(val_real_img, val_real_c):
+                        loss.evaluate_discriminator(real_img=real_img, real_c=real_c)
+            if rank == 0:
+                print("Finished!")
 
         # Evaluate metrics.
         if (snapshot_data is not None) and (len(metrics) > 0):
