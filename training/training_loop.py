@@ -186,7 +186,8 @@ def training_loop(
         c_dim=training_set.label_dim, img_resolution=training_set.resolution, img_channels=training_set.num_channels
     )
     # Add output_dim to epilogue_kwargs to perform classification
-    D_kwargs.epilogue_kwargs.output_dim = training_set.label_shape[0] if training_set.has_labels else 0
+    # D_kwargs.epilogue_kwargs.output_dim = training_set.label_shape[0] if training_set.has_labels else 0
+    D_kwargs.epilogue_kwargs.output_dim = 0
 
     G = (
         dnnlib.util.construct_class_by_name(**G_kwargs, **common_kwargs).train().requires_grad_(False).to(device)

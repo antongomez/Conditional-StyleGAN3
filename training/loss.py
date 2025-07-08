@@ -119,6 +119,7 @@ class StyleGAN2Loss(Loss):
         pl_no_weight_grad=False,
         blur_init_sigma=0,
         blur_fade_kimg=0,
+        class_weight=0,
     ):
         super().__init__()
         self.device = device
@@ -134,6 +135,7 @@ class StyleGAN2Loss(Loss):
         self.pl_mean = torch.zeros([], device=device)
         self.blur_init_sigma = blur_init_sigma
         self.blur_fade_kimg = blur_fade_kimg
+        self.class_weight = class_weight
 
     def run_G(self, z, c, update_emas=False):
         ws = self.G.mapping(z, c, update_emas=update_emas)
@@ -245,7 +247,7 @@ class StyleGAN2Loss(Loss):
                     training_stats.report("Loss/D/adversarial", loss_Dgen + loss_Dreal)
                     loss_cls_real = torch.nn.functional.cross_entropy(real_logits, real_c.argmax(dim=1))
                     training_stats.report("Loss/D/classification/real", loss_cls_real)
-                    loss_Dreal = loss_Dreal + 0.25 * loss_cls_real
+                    loss_Dreal = loss_Dreal + self.class_weight * loss_cls_real
                     training_stats.report("Loss/D/loss", loss_Dreal)
 
                 loss_Dr1 = 0
