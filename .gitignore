@@ -18,3 +18,9 @@ run_job.sh
 job_outputs/
 *.err
 *.out
+
+# Ignore singularity files
+*.sif
+
+# Ignore venvironment files
+*_venv/

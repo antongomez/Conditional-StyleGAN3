@@ -1,10 +1,16 @@
 #!/bin/bash
 
+is_power_of_two() {
+  local n=$1
+  (( n > 0 )) && (( (n & (n-1)) == 0 ))
+}
+
 # Default values
 EPOCHS=0
 DATASET="oitaven_train"
 DATSET_VAL="oitaven_val"
 GPUS=1 
+BATCH=64
 
 # Parse arguments
 for arg in "$@"; do
@@ -25,11 +31,20 @@ for arg in "$@"; do
       GPUS="${arg#*=}"
       shift
       ;;
+    --batch=*)
+      BATCH="${arg#*=}"
+      shift
+      ;;
     *)
       OTHER_ARGS+="$arg "
       ;;
   esac
 done
+
+if ! is_power_of_two "$BATCH"; then
+  echo "* Error: --batch must be a power of two."
+  exit 1
+fi
 
 # Paths
 DATASET_ZIP="data/${DATASET}.zip"
@@ -37,7 +52,6 @@ DATASET_VAL_ZIP="data/${DATSET_VAL}.zip"
 DATASET_TMP_DIR="data/tmp"
 DATASET_JSON="${DATASET_TMP_DIR}/dataset.json"
 OUTDIR="./training-runs/$(echo ${DATASET} | tr '[:lower:]' '[:upper:]')"
-BATCH=64
 BATCH_GPU=$(( BATCH / GPUS ))
 
 # Calculate kimg if epochs are specified

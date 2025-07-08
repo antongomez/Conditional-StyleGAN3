@@ -2,7 +2,6 @@ import os, math, random, argparse, json
 from tqdm import tqdm
 import numpy as np
 import torch
-from torch.utils.data import Dataset
 from sklearn import preprocessing
 from PIL import Image
 
