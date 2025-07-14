@@ -240,7 +240,7 @@ class StyleGAN2Loss(Loss):
                         training_stats.report(key, confusion_tensor)
 
                 # Compute losses (adversarial and classification)
-                loss_Dreal = 0
+                loss_Dtotal = 0
                 loss_cls_real = 0
                 if phase in ["Dmain", "Dboth"]:
                     loss_Dreal = torch.nn.functional.softplus(-real_conditioned_logits)  # -log(sigmoid(real_logits))

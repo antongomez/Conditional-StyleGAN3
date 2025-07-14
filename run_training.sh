@@ -94,4 +94,4 @@ fi
 python train.py --outdir="$OUTDIR" --cfg=stylegan3-t --data="$DATASET_ZIP" --cond=True \
   --gpus=$GPUS --batch=$BATCH --gamma=0.125 --batch-gpu=$BATCH_GPU \
   --kimg=$NUM_KIMG --tick=10 --snap=5 --metrics=none \
-  --mirror=False --aug=noaug --data-val=$DATASET_VAL_ZIP $OTHER_ARGS
+  --mirror=False --data-val=$DATASET_VAL_ZIP $OTHER_ARGS
