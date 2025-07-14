@@ -244,12 +244,12 @@ class StyleGAN2Loss(Loss):
                 loss_cls_real = 0
                 if phase in ["Dmain", "Dboth"]:
                     loss_Dreal = torch.nn.functional.softplus(-real_conditioned_logits)  # -log(sigmoid(real_logits))
-                    training_stats.report("Loss/D/adversarial", loss_Dgen + loss_Dreal)
+                    training_stats.report("Loss/D/loss", loss_Dgen + loss_Dreal)
                     if real_logits is not None:
                         loss_cls_real = torch.nn.functional.cross_entropy(real_logits, real_c.argmax(dim=1))
                         training_stats.report("Loss/D/classification/real", loss_cls_real)
-                    loss_Dreal = loss_Dreal + self.class_weight * loss_cls_real # 0 if no classification loss
-                    training_stats.report("Loss/D/loss", loss_Dreal)
+                    loss_Dtotal = loss_Dreal + self.class_weight * loss_cls_real # 0 if no classification loss
+                    training_stats.report("Loss/D/total", loss_Dgen + loss_Dtotal)
 
                 loss_Dr1 = 0
                 if phase in ["Dreg", "Dboth"]:
@@ -266,7 +266,7 @@ class StyleGAN2Loss(Loss):
                     training_stats.report("Loss/D/reg", loss_Dr1)
 
             with torch.autograd.profiler.record_function(name + "_backward"):
-                (loss_Dreal + loss_Dr1).mean().mul(gain).backward()
+                (loss_Dtotal + loss_Dr1).mean().mul(gain).backward()
 
     def evaluate_discriminator(self, real_img, real_c):
         self.D.eval()

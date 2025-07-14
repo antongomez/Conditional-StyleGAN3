@@ -143,6 +143,10 @@ def save_image_grid(img, fname, drange, grid_size):
     img = img.transpose(0, 2, 1, 3, 4)
     img = img.reshape([gh * H, gw * W, C])
 
+    if C == 5:
+        img = img[:, :, [2, 1, 0]]  # Select rgb channels
+        C = 3
+
     assert C in [1, 3]
     if C == 1:
         PIL.Image.fromarray(img[:, :, 0], "L").save(fname)
