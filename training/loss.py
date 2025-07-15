@@ -220,23 +220,30 @@ class StyleGAN2Loss(Loss):
                 )
                 training_stats.report("Loss/scores/fake", gen_conditioned_logits)
                 training_stats.report("Loss/signs/fake", gen_conditioned_logits.sign())
-                loss_Dgen = torch.nn.functional.softplus(gen_conditioned_logits)  # -log(1 - sigmoid(gen_logits))
 
-                 # Compute classification results per class (only reporting)
-                if phase in ["Dmain", "Dboth"] and real_logits is not None:
-                    results_per_class = compute_class_prediction_accuracy(real_logits, real_c)
+                # Compute classification results per class (only reporting)
+                if phase in ["Dmain", "Dboth"] and gen_logits is not None:
+                    results_per_class = compute_class_prediction_accuracy(gen_logits, real_c)
                     for cls, classification_tensor in results_per_class.items():
                         training_stats.report(f"Accuracy/fake/{cls}", classification_tensor)
-                    confusion_matrix_dict = compute_confusion_matrix_dict(real_logits, real_c, type="fake")
+                    confusion_matrix_dict = compute_confusion_matrix_dict(gen_logits, real_c, type="fake")
                     for key, confusion_tensor in confusion_matrix_dict.items():
                         training_stats.report(key, confusion_tensor)
+                
+                # Compute adversarial loss for generated images
+                loss_Dgen = torch.nn.functional.softplus(gen_conditioned_logits)  # -log(1 - sigmoid(gen_logits))
 
                 # Compute classification loss also with generated images
                 if gen_logits is not None:
                     loss_cls_gen = torch.nn.functional.cross_entropy(gen_logits, gen_c.argmax(dim=1))
                     training_stats.report("Loss/D/classification/fake", loss_cls_gen)
+
+                #  If discriminator is not run on generated images, do not compute classification loss
+                if not disc_on_gen:
+                    loss_cls_gen = 0 
+
             with torch.autograd.profiler.record_function("Dgen_backward"):
-                loss_Dgen.mean().mul(gain).backward()
+                (loss_Dgen + self.class_weight * loss_cls_gen).mean().mul(gain).backward()
 
         # Dmain: Maximize logits for real images.
         # Dr1: Apply R1 regularization.
@@ -266,8 +273,7 @@ class StyleGAN2Loss(Loss):
                     if real_logits is not None:
                         loss_cls_real = torch.nn.functional.cross_entropy(real_logits, real_c.argmax(dim=1))
                         training_stats.report("Loss/D/classification/real", loss_cls_real)
-                    loss_Dcls = loss_cls_real + loss_cls_gen if disc_on_gen else loss_cls_real
-                    loss_Dtotal = loss_Dreal + self.class_weight * loss_Dcls
+                    loss_Dtotal = loss_Dreal + self.class_weight * loss_cls_real
                     training_stats.report("Loss/D/total", loss_Dgen + loss_Dtotal)
 
                 loss_Dr1 = 0
@@ -304,7 +310,7 @@ class StyleGAN2Loss(Loss):
             loss_cls_real = torch.nn.functional.cross_entropy(real_logits, real_c.argmax(dim=1))
             training_stats.report("Loss/D/classification/real/val", loss_cls_real)
 
-        self.D.train().require_grad_(False) # in main loop, we will set requires_grad to True for the discriminator
+        self.D.train().requires_grad_(False) # in main loop, we will set requires_grad to True for the discriminator
 
 
 # ----------------------------------------------------------------------------
