@@ -61,19 +61,22 @@ def compute_class_prediction_accuracy(predictions, ground_truth):
     return results_per_class
 
 
-def compute_confusion_matrix_dict(predictions, ground_truth):
+def compute_confusion_matrix_dict(predictions, ground_truth, type="real"):
     """
     Computes a confusion matrix in dictionary format.
 
     Args:
         predictions (torch.Tensor): Tensor of size (batch_size, dim_label) with predicted values.
         ground_truth (torch.Tensor): Tensor of size (batch_size,) with ground truth labels.
+        type (str): Type of confusion matrix to compute, either "real" or "fake".
 
     Returns:
         dict: Dictionary where each key is "Classification/{real_class}/{predicted_class}"
               and the value is a tensor with 1s for each instance where the prediction matches
               the real class and 0s otherwise.
     """
+    assert type in ["real", "fake", "val"], "Type must be either 'real', 'fake' or 'val'."
+
     # Get predicted classes and ground truth classes
     predicted_classes = torch.argmax(predictions, dim=1)
     ground_truth_classes = torch.argmax(ground_truth, dim=1)
@@ -98,7 +101,7 @@ def compute_confusion_matrix_dict(predictions, ground_truth):
             confusion_tensor = combined_mask.float().unsqueeze(1)
 
             # Store the tensor in the dictionary
-            key = f"Classification/{real_class}/{predicted_class}"
+            key = f"Classification/{type}/{real_class}/{predicted_class}"
             confusion_matrix_dict[key] = confusion_tensor.squeeze(1)
 
     return confusion_matrix_dict
@@ -162,7 +165,7 @@ class StyleGAN2Loss(Loss):
         conditioned_logits, classification_logits = self.D(img, c, update_emas=update_emas)
         return conditioned_logits, classification_logits
 
-    def accumulate_gradients(self, phase, real_img, real_c, gen_z, gen_c, gain, cur_nimg):
+    def accumulate_gradients(self, phase, real_img, real_c, gen_z, gen_c, gain, cur_nimg, disc_on_gen=False):
         assert phase in ["Gmain", "Greg", "Gboth", "Dmain", "Dreg", "Dboth"]
         if self.pl_weight == 0:
             phase = {"Greg": "none", "Gboth": "Gmain"}.get(phase, phase)
@@ -208,15 +211,30 @@ class StyleGAN2Loss(Loss):
 
         # Dmain: Minimize logits for generated images.
         loss_Dgen = 0
+        loss_cls_gen = 0
         if phase in ["Dmain", "Dboth"]:
             with torch.autograd.profiler.record_function("Dgen_forward"):
                 gen_img, _gen_ws = self.run_G(gen_z, gen_c, update_emas=True)
-                gen_conditioned_logits, _gen_logits = self.run_D(
+                gen_conditioned_logits, gen_logits = self.run_D(
                     gen_img, gen_c, blur_sigma=blur_sigma, update_emas=True
                 )
                 training_stats.report("Loss/scores/fake", gen_conditioned_logits)
                 training_stats.report("Loss/signs/fake", gen_conditioned_logits.sign())
                 loss_Dgen = torch.nn.functional.softplus(gen_conditioned_logits)  # -log(1 - sigmoid(gen_logits))
+
+                 # Compute classification results per class (only reporting)
+                if phase in ["Dmain", "Dboth"] and real_logits is not None:
+                    results_per_class = compute_class_prediction_accuracy(real_logits, real_c)
+                    for cls, classification_tensor in results_per_class.items():
+                        training_stats.report(f"Accuracy/fake/{cls}", classification_tensor)
+                    confusion_matrix_dict = compute_confusion_matrix_dict(real_logits, real_c, type="fake")
+                    for key, confusion_tensor in confusion_matrix_dict.items():
+                        training_stats.report(key, confusion_tensor)
+
+                # Compute classification loss also with generated images
+                if gen_logits is not None:
+                    loss_cls_gen = torch.nn.functional.cross_entropy(gen_logits, gen_c.argmax(dim=1))
+                    training_stats.report("Loss/D/classification/fake", loss_cls_gen)
             with torch.autograd.profiler.record_function("Dgen_backward"):
                 loss_Dgen.mean().mul(gain).backward()
 
@@ -234,8 +252,8 @@ class StyleGAN2Loss(Loss):
                 if phase in ["Dmain", "Dboth"] and real_logits is not None:
                     results_per_class = compute_class_prediction_accuracy(real_logits, real_c)
                     for cls, classification_tensor in results_per_class.items():
-                        training_stats.report(f"Accuracy/{cls}", classification_tensor)
-                    confusion_matrix_dict = compute_confusion_matrix_dict(real_logits, real_c)
+                        training_stats.report(f"Accuracy/real/{cls}", classification_tensor)
+                    confusion_matrix_dict = compute_confusion_matrix_dict(real_logits, real_c, type="real")
                     for key, confusion_tensor in confusion_matrix_dict.items():
                         training_stats.report(key, confusion_tensor)
 
@@ -248,7 +266,8 @@ class StyleGAN2Loss(Loss):
                     if real_logits is not None:
                         loss_cls_real = torch.nn.functional.cross_entropy(real_logits, real_c.argmax(dim=1))
                         training_stats.report("Loss/D/classification/real", loss_cls_real)
-                    loss_Dtotal = loss_Dreal + self.class_weight * loss_cls_real # 0 if no classification loss
+                    loss_Dcls = loss_cls_real + loss_cls_gen if disc_on_gen else loss_cls_real
+                    loss_Dtotal = loss_Dreal + self.class_weight * loss_Dcls
                     training_stats.report("Loss/D/total", loss_Dgen + loss_Dtotal)
 
                 loss_Dr1 = 0
@@ -277,15 +296,15 @@ class StyleGAN2Loss(Loss):
             results_per_class = compute_class_prediction_accuracy(real_logits, real_c)
             for cls, classification_tensor in results_per_class.items():
                 training_stats.report(f"Accuracy/val/{cls}", classification_tensor)
-            confusion_matrix_dict = compute_confusion_matrix_dict(real_logits, real_c)
+            confusion_matrix_dict = compute_confusion_matrix_dict(real_logits, real_c, type="val")
             for key, confusion_tensor in confusion_matrix_dict.items():
-                training_stats.report(key.replace("Classification", "Classification/val"), confusion_tensor)
+                training_stats.report(key, confusion_tensor)
 
             # Compute loss and report
             loss_cls_real = torch.nn.functional.cross_entropy(real_logits, real_c.argmax(dim=1))
             training_stats.report("Loss/D/classification/real/val", loss_cls_real)
 
-        self.D.train()
+        self.D.train().require_grad_(False) # in main loop, we will set requires_grad to True for the discriminator
 
 
 # ----------------------------------------------------------------------------

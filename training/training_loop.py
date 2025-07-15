@@ -131,6 +131,8 @@ def training_loop(
     cudnn_benchmark=True,  # Enable torch.backends.cudnn.benchmark?
     abort_fn=None,  # Callback function for determining whether to abort training. Must return consistent results across ranks.
     progress_fn=None,  # Callback function for updating training progress. Called for all ranks.
+    uniform_class_labels=False,  # Use uniform class labels for generated images or use the training set distribution?
+    disc_on_gen=False,  # Whether to run the discriminator on generated images.
 ):
     # Initialize.
     start_time = time.time()
@@ -324,9 +326,22 @@ def training_loop(
             phase_real_c = phase_real_c.to(device).split(batch_gpu)
             all_gen_z = torch.randn([len(phases) * batch_size, G.z_dim], device=device)
             all_gen_z = [phase_gen_z.split(batch_gpu) for phase_gen_z in all_gen_z.split(batch_size)]
-            all_gen_c = [
-                training_set.get_label(np.random.randint(len(training_set))) for _ in range(len(phases) * batch_size)
-            ]
+
+            # Generate random class vectors
+            all_gen_c = []
+            if uniform_class_labels:
+                # Generate random class vectors following a uniform distribution
+                class_ids = np.random.randint(0, training_set.label_dim, size=len(phases) * batch_size)
+                for cid in class_ids:
+                    vec = np.zeros(training_set.label_dim, dtype=np.float32)
+                    vec[cid] = 1.0
+                    all_gen_c.append(vec)
+            else:
+                # Generate random class vectors following the training set distribution
+                all_gen_c = [
+                    training_set.get_label(np.random.randint(len(training_set))) for _ in range(len(phases) * batch_size)
+                ] 
+
             all_gen_c = torch.from_numpy(np.stack(all_gen_c)).pin_memory().to(device)
             all_gen_c = [phase_gen_c.split(batch_gpu) for phase_gen_c in all_gen_c.split(batch_size)]
 
@@ -349,6 +364,7 @@ def training_loop(
                     gen_c=gen_c,
                     gain=phase.interval,
                     cur_nimg=cur_nimg,
+                    disc_on_gen=disc_on_gen,
                 )
             phase.module.requires_grad_(False)
 

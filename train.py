@@ -142,7 +142,12 @@ def parse_comma_separated_list(s):
 @click.option('--aug',          help='Augmentation mode',                                       type=click.Choice(['noaug', 'ada', 'fixed']), default='ada', show_default=True)
 @click.option('--resume',       help='Resume from given network pickle', metavar='[PATH|URL]',  type=str)
 @click.option('--freezed',      help='Freeze first layers of D', metavar='INT',                 type=click.IntRange(min=0), default=0, show_default=True)
+
+# Custom optional features.
 @click.option('--data-val',     help='Validation data', metavar='[ZIP|DIR]',                    type=str, default="", show_default=True)
+@click.option('--cls_weight',   help='Weight of the classification loss', metavar='FLOAT',      type=click.FloatRange(min=0, max=1), default=0.0, show_default=True)
+@click.option('--uniform-class',help='Use uniform class labels', metavar='BOOL',                type=bool, default=False, show_default=True)
+@click.option('--disc-on-gen',  help='Run discriminator on generated images', metavar='BOOL',   type=bool, default=False, show_default=True)
 
 # Misc hyperparameters.
 @click.option('--p',            help='Probability for --aug=fixed', metavar='FLOAT',            type=click.FloatRange(min=0, max=1), default=0.2, show_default=True)
@@ -154,7 +159,6 @@ def parse_comma_separated_list(s):
 @click.option('--dlr',          help='D learning rate', metavar='FLOAT',                        type=click.FloatRange(min=0), default=0.002, show_default=True)
 @click.option('--map-depth',    help='Mapping network depth  [default: varies]', metavar='INT', type=click.IntRange(min=1))
 @click.option('--mbstd-group',  help='Minibatch std group size', metavar='INT',                 type=click.IntRange(min=1), default=4, show_default=True)
-@click.option('--cls_weight',   help='Weight of the classification loss', metavar='FLOAT',      type=click.FloatRange(min=0, max=1), default=0.0, show_default=True)
 
 # Misc settings.
 @click.option('--desc',         help='String to include in result dir name', metavar='STR',     type=str)
@@ -210,6 +214,8 @@ def main(**kwargs):
     c.training_set_kwargs.xflip = opts.mirror
     c.validation_set_kwargs.use_labels = opts.cond
     c.validation_set_kwargs.xflip = opts.mirror
+    c.uniform_class_labels = opts.uniform_class 
+    c.disc_on_gen = opts.disc_on_gen
 
     # Hyperparameters & settings.
     c.num_gpus = opts.gpus

@@ -11,10 +11,15 @@ DATASET="oitaven_train"
 DATSET_VAL="oitaven_val"
 GPUS=1 
 BATCH=64
+CFG="stylegan3-t"
 
 # Parse arguments
 for arg in "$@"; do
   case $arg in
+    --cfg=*)
+      CFG="${arg#*=}"
+      shift
+      ;;
     --epochs=*)
       EPOCHS="${arg#*=}"
       shift
@@ -40,6 +45,18 @@ for arg in "$@"; do
       ;;
   esac
 done
+
+# Validate that --cfg has an allowed value
+case "${CFG}" in
+  stylegan3-t|stylegan3-r|stylegan2)
+    # valid value
+    ;;
+  *)
+    echo "ERROR: invalid value for --cfg: '${CFG}'"
+    echo "       Allowed values: stylegan3-t, stylegan3-r, stylegan2"
+    exit 1
+    ;;
+esac
 
 if ! is_power_of_two "$BATCH"; then
   echo "* Error: --batch must be a power of two."
@@ -90,8 +107,23 @@ else
   echo "* Using default kimg: $NUM_KIMG"
 fi
 
+# Print configuration
+echo "Configuration:"
+echo "  cfg          = ${CFG}"
+echo "  epochs       = ${EPOCHS}"
+echo "  kimg         = ${NUM_KIMG}"
+echo "  dataset      = ${DATASET}"
+echo "  dataset-val  = ${DATSET_VAL}"
+echo "  gpus         = ${GPUS}"
+echo "  batch        = ${BATCH}"
+if [ ${#OTHER_ARGS[@]} -gt 0 ]; then
+  echo "  other args   = ${OTHER_ARGS[*]}"
+else
+  echo "  other args   = (none)"
+fi
+
 # Run training
-python train.py --outdir="$OUTDIR" --cfg=stylegan3-t --data="$DATASET_ZIP" --cond=True \
+python train.py --outdir="$OUTDIR" --cfg="$CFG" --data="$DATASET_ZIP" --cond=True \
   --gpus=$GPUS --batch=$BATCH --gamma=0.125 --batch-gpu=$BATCH_GPU \
   --kimg=$NUM_KIMG --tick=10 --snap=5 --metrics=none \
   --mirror=False --data-val=$DATASET_VAL_ZIP $OTHER_ARGS
