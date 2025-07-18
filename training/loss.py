@@ -221,10 +221,10 @@ class StyleGAN2Loss(Loss):
 
                 # Compute classification results per class (only reporting)
                 if phase in ["Dmain", "Dboth"] and gen_logits is not None:
-                    results_per_class = compute_class_prediction_accuracy(gen_logits, real_c)
+                    results_per_class = compute_class_prediction_accuracy(gen_logits, gen_c)
                     for cls, classification_tensor in results_per_class.items():
                         training_stats.report(f"Accuracy/fake/{cls}", classification_tensor)
-                    confusion_matrix_dict = compute_confusion_matrix_dict(gen_logits, real_c, type="fake")
+                    confusion_matrix_dict = compute_confusion_matrix_dict(gen_logits, gen_c, type="fake")
                     for key, confusion_tensor in confusion_matrix_dict.items():
                         training_stats.report(key, confusion_tensor)
 
