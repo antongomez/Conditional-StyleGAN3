@@ -12,6 +12,9 @@ DATSET_VAL="oitaven_val"
 GPUS=1 
 BATCH=64
 CFG="stylegan3-t"
+TICK=10
+SNAP=1
+DRY_RUN=False
 
 # Parse arguments
 for arg in "$@"; do
@@ -38,6 +41,18 @@ for arg in "$@"; do
       ;;
     --batch=*)
       BATCH="${arg#*=}"
+      shift
+      ;;
+    --tick=*)
+      TICK="${arg#*=}"
+      shift
+      ;;
+    --snap=*)
+      SNAP="${arg#*=}"
+      shift
+      ;;
+    --dry-run=*)
+      DRY_RUN="${arg#*=}"
       shift
       ;;
     *)
@@ -86,7 +101,6 @@ if [ "$EPOCHS" -gt 0 ]; then
   fi
 
   # Count the number of images in the dataset
-  # Count the number of images in the dataset
   if [ -f "$DATASET_JSON" ]; then
     NUM_IMAGES=$(python -c "import json; print(len(json.load(open('${DATASET_JSON}'))['labels']))")
     echo "* Number of images in the dataset: $NUM_IMAGES"
@@ -116,14 +130,24 @@ echo "  dataset      = ${DATASET}"
 echo "  dataset-val  = ${DATSET_VAL}"
 echo "  gpus         = ${GPUS}"
 echo "  batch        = ${BATCH}"
+echo "  batch-gpu    = ${BATCH_GPU}"
+echo "  tick         = ${TICK}"
+echo "  snap         = ${SNAP}"
+echo "  dry-run      = ${DRY_RUN}"
 if [ ${#OTHER_ARGS[@]} -gt 0 ]; then
   echo "  other args   = ${OTHER_ARGS[*]}"
 else
   echo "  other args   = (none)"
 fi
 
+# Check if dry run is enabled
+if [[ "${DRY_RUN,,}" == "true" ]]; then
+  echo "Dry run enabled. Exiting without training."
+  exit 0
+fi
+
 # Run training
 python train.py --outdir="$OUTDIR" --cfg="$CFG" --data="$DATASET_ZIP" --cond=True \
   --gpus=$GPUS --batch=$BATCH --gamma=0.125 --batch-gpu=$BATCH_GPU \
-  --kimg=$NUM_KIMG --tick=10 --snap=5 --metrics=none \
+  --kimg=$NUM_KIMG --tick=$TICK --snap=$SNAP --metrics=none \
   --mirror=False --data-val=$DATASET_VAL_ZIP $OTHER_ARGS

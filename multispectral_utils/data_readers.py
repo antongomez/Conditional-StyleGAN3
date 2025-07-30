@@ -132,14 +132,16 @@ def load_multispectral_dataset(input_dir, filename):
     raw_file = os.path.join(input_dir, f"{filename}.raw")
     gt_file = os.path.join(input_dir, f"{filename}.pgm")
     centers_file = os.path.join(input_dir, f"seg_{filename}_wp_centers.raw")
+    seg_file = os.path.join(input_dir, f"seg_{filename}_wp.raw")
     
     # Read all data
     data, image_height, image_width, num_channels = read_raw(raw_file)
     truth, gt_height, gt_width = read_pgm(gt_file)
     centers, centers_height, centers_width, nseg = read_seg_centers(centers_file)
+    segmentation_data, segmentation_height, segmentation_width = read_seg(seg_file)
     
     # Validate dimensions
-    assert image_height == gt_height and image_width == gt_width, \
+    assert image_height == gt_height == segmentation_height and image_width == gt_width == segmentation_width, \
         f"Data and GT dimensions do not match: {image_height}x{image_width} vs {gt_height}x{gt_width}"
     
     # Transpose data to band-vector format for convolutions
@@ -149,6 +151,7 @@ def load_multispectral_dataset(input_dir, filename):
         'data': data,
         'truth': truth,
         'centers': centers,
+        'segmentation_data': segmentation_data,
         'dimensions': {
             'height': image_height,
             'width': image_width,

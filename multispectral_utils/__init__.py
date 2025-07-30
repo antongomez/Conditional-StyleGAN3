@@ -10,7 +10,7 @@ from .data_readers import (
     read_seg,
     read_pgm,
     read_seg_centers,
-    load_multispectral_dataset
+    load_multispectral_dataset,
 )
 
 from .data_splitter import (
@@ -35,6 +35,15 @@ from .multispectral_utils import (
     load_processed_dataset,
     create_dataset_report,
     validate_dataset_integrity
+)
+
+from .pixel_evaluation import (
+    build_discriminator,
+    init_dataset_kwargs,
+    build_test_dataset,
+    calculate_pixel_accuracy,
+    calculate_pixel_accuracy_optimized,
+    calculate_pixel_accuracy_ultra_optimized
 )
 
 __version__ = "1.0.0"
@@ -68,4 +77,12 @@ __all__ = [
     'load_processed_dataset',
     'create_dataset_report',
     'validate_dataset_integrity'
+
+    # Pixel evaluation
+    'build_discriminator',
+    'init_dataset_kwargs',
+    'build_test_dataset',
+    'calculate_pixel_accuracy',
+    'calculate_pixel_accuracy_optimized',
+    'calculate_pixel_accuracy_ultra_optimized'
 ]

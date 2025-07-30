@@ -7,7 +7,8 @@ from multispectral_utils import (
     process_multispectral_dataset,
     load_processed_dataset,
     create_dataset_report,
-    validate_dataset_integrity
+    validate_dataset_integrity,
+    build_discriminator
 )
 
 
@@ -92,7 +93,7 @@ def main():
         # Display split statistics
         from multispectral_utils import get_split_statistics
         get_split_statistics(dataset['split_info'])
-    
+
     elif args.mode == "report":
         print("=" * 60)
         print("GENERATING DATASET REPORT")
@@ -128,48 +129,6 @@ def main():
             print("\nWarnings:")
             for warning in validation_results['warnings']:
                 print(f"  - {warning}")
-
-
-def example_workflow():
-    """Example workflow showing how to use the utilities step by step."""
-    print("=" * 60)
-    print("EXAMPLE WORKFLOW")
-    print("=" * 60)
-    
-    # Example parameters
-    input_dir = "data/oitaven/"
-    output_dir = "data/oitaven/patches/"
-    filename = "oitaven"
-    
-    # 1. Process dataset
-    print("1. Processing dataset...")
-    results = process_multispectral_dataset(
-        input_dir=input_dir,
-        filename=filename,
-        output_dir=output_dir,
-        train_size=0.15,
-        val_size=0.05,
-        patch_size=32,
-        rgb=False,
-        seed=42,
-        split_format='json'
-    )
-    
-    # 2. Load processed dataset
-    print("\n2. Loading processed dataset...")
-    dataset = load_processed_dataset(output_dir, 'json')
-    
-    # 3. Generate report
-    print("\n3. Generating report...")
-    report_file = create_dataset_report(output_dir, 'json')
-    
-    # 4. Validate integrity
-    print("\n4. Validating integrity...")
-    validation = validate_dataset_integrity(output_dir, 'json')
-    
-    print(f"\nWorkflow complete! Results saved to: {output_dir}")
-    return results, dataset, report_file, validation
-
 
 if __name__ == "__main__":
     main()
