@@ -84,7 +84,7 @@ def _calculate_sample_sizes(total_samples_per_class, train_ratio, val_ratio, bat
             print(f"  Adjusting validation samples to be a multiple of {batch_size}. Adding {to_add} samples.")
 
             for _ in range(to_add):
-                best_cls = max(val_raw.keys(), key=lambda k: val_raw[k] - val_samples[k])
+                best_cls = min(val_samples.keys(), key=lambda k: val_samples[k] / total_samples_per_class[k])
                 val_samples[best_cls] += 1
 
             total_val = sum(val_samples.values())
