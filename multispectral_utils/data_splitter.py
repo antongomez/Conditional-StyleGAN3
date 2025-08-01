@@ -68,12 +68,11 @@ def _calculate_sample_sizes(total_samples_per_class, train_ratio, val_ratio, bat
     """
     train_samples = {}
     val_samples = {}
-    val_raw = {}
 
     for cls, total in total_samples_per_class.items():
-        train_samples[cls] = math.floor(train_ratio * total)
-        val_raw[cls] = val_ratio * total
-        val_samples[cls] = math.floor(val_raw[cls])
+        # There are some datasets with very few samples per class (e.g., 5, 8 or 14)
+        train_samples[cls] = max(math.floor(train_ratio * total), 1) # Ensure at least one sample
+        val_samples[cls] = max(math.floor(val_ratio * total), 1)
 
     total_val = sum(val_samples.values())
 
