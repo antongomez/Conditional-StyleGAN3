@@ -44,11 +44,9 @@ def _shuffle_patches_by_class(patches_by_class, seed):
 def _create_label_map(patches_by_class):
     """Create label mapping for classes with samples."""
     label_map = {}
-    label_counter = 1
 
     for class_idx in sorted(patches_by_class.keys()):
-        label_map[class_idx + 1] = label_counter
-        label_counter += 1
+        label_map[class_idx + 1] = class_idx
 
     return label_map
 

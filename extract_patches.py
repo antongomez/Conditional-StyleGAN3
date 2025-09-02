@@ -27,7 +27,7 @@ def main():
                        help="Whether to save patches as RGB images")
     parser.add_argument("--train-size", type=float, default=0.15, 
                        help="Size of the train set (default: 0.15)")
-    parser.add_argument("--validation_size", type=float, default=0.05, 
+    parser.add_argument("--validation-size", type=float, default=0.05, 
                        help="Size of the validation set (default: 0.05)")
     parser.add_argument("--patch-size", type=int, default=32, 
                        help="Square patch size (default: 32)")
