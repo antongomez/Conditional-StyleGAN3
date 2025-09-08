@@ -197,40 +197,15 @@ def extract_confusion_matrix(jsonl_data, class_labels, progress_tick=None, data_
     confusion_matrix = np.zeros((num_classes, num_classes), dtype=int)
     entry = jsonl_data[-1] if progress_tick is None else jsonl_data[progress_tick]
 
+    label_map = {label: idx for idx, label in enumerate(class_labels)}
+
     for real_class in class_labels:
         for pred_class in class_labels:
             key = f"Classification/{data_type}/{real_class}/{pred_class}"
             value = entry[key]
             if isinstance(value, dict) and "mean" in value and "num" in value:
-                confusion_matrix[real_class, pred_class] = int(value["mean"] * value["num"])
+                confusion_matrix[label_map[real_class], label_map[pred_class]] = int(value["mean"] * value["num"])
     return confusion_matrix
-
-
-def plot_confusion_matrix(confusion_matrix, class_labels):
-    """Plots a confusion matrix with a heatmap and text annotations."""
-    plt.figure(figsize=(8, 6))
-    plt.imshow(confusion_matrix, interpolation="nearest", cmap=plt.cm.Blues)
-    plt.title("Confusion Matrix")
-    plt.colorbar()
-
-    tick_marks = np.arange(len(class_labels))
-    plt.xticks(tick_marks, class_labels, rotation=45)
-    plt.yticks(tick_marks, class_labels)
-
-    for i in range(confusion_matrix.shape[0]):
-        for j in range(confusion_matrix.shape[1]):
-            plt.text(
-                j,
-                i,
-                int(confusion_matrix[i, j]),
-                horizontalalignment="center",
-                color="white" if confusion_matrix[i, j] > confusion_matrix.max() / 2 else "black",
-            )
-
-    plt.ylabel("True Class")
-    plt.xlabel("Predicted Class")
-    plt.tight_layout()
-    plt.show()
 
 
 def plot_metric(data, metrics, x_axis="Progress/kimg", colors=None, marker="o", title=None, ylim=None):
@@ -498,6 +473,8 @@ def plot_confusion_matrix(confusion_matrix, class_labels, title="Confusion Matri
     plt.imshow(confusion_matrix, interpolation="nearest", cmap=plt.cm.Blues)
     plt.title(title)
     plt.colorbar()
+
+    class_labels = [c+1 for c in class_labels]  # Assuming class labels are 0-indexed
 
     # Add labels to the axes
     tick_marks = np.arange(len(class_labels))
