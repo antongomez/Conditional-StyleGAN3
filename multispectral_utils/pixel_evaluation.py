@@ -44,10 +44,6 @@ def build_discriminator(network_pkl: str):
     print('Discriminator network loaded.')
     return D, device
 
-def convert_label_map_to_int_keys(label_map):
-    """Convert string keys in label_map to integer keys."""
-    return {int(k): v for k, v in label_map.items()}
-
 def load_dataset_and_split_info(input_dir, output_dir, filename, split_format):
     """Load dataset information and data split configuration."""
     dataset = load_multispectral_dataset(input_dir, filename)
@@ -135,7 +131,7 @@ def generate_pixel_classification_map(predictions, test_indices, centers, segmen
     
     return pixel_output
 
-def calculate_metrics_vectorized(pixel_output, truth, label_map, num_classes, show_progress=False):
+def calculate_metrics_vectorized(pixel_output, truth, num_classes, show_progress=False):
     """Calculate OA and AA metrics using vectorized operations."""
     if show_progress:
         print("Calculating metrics...")
@@ -155,18 +151,15 @@ def calculate_metrics_vectorized(pixel_output, truth, label_map, num_classes, sh
     valid_predictions = pixel_output[valid_mask]
     valid_truth = truth[valid_mask]
     
-    # Map truths using vectorization
-    mapped_truth = np.array([label_map[t] for t in valid_truth])
-    
     # Calculate OA
-    correct_predictions = (valid_predictions == mapped_truth)
+    correct_predictions = (valid_predictions == valid_truth)
     OA = np.sum(correct_predictions) / valid_pixels
     
     # Calculate AA using vectorized operations
     class_accuracies = np.zeros(num_classes + 1)
     
     for class_id in range(1, num_classes + 1):
-        class_mask = (mapped_truth == class_id)
+        class_mask = (valid_truth == class_id)
         class_total = np.sum(class_mask)
         
         if class_total > 0:
@@ -250,7 +243,6 @@ def calculate_pixel_accuracy(input_dir, output_dir, filename, split_format, data
     test_indices = split_info['test_indices']
     batch_size = split_info['metadata']['batch_size']
     num_classes = split_info['split_stats']['num_classes']
-    label_map = convert_label_map_to_int_keys(split_info['label_map'])
 
     # Initialize output array
     total_centers = 0
@@ -328,7 +320,7 @@ def calculate_pixel_accuracy(input_dir, output_dir, filename, split_format, data
     for i in dataloader:
         if pixel_output[i] == 0 or truth[i] == 0:
             continue
-        pixel_truth = label_map[truth[i]]
+        pixel_truth = truth[i]
         total += 1
         class_total[pixel_truth] += 1
         if pixel_output[i] == pixel_truth:
@@ -371,7 +363,6 @@ def calculate_pixel_accuracy_optimized(input_dir, output_dir, filename, split_fo
     test_indices = split_info['test_indices']
     batch_size = split_info['metadata']['batch_size']
     num_classes = split_info['split_stats']['num_classes']
-    label_map = convert_label_map_to_int_keys(split_info['label_map'])
     
     # 2. Patch predictions
     predictions = predict_patches_batch(dataloader, D, batch_size, device, show_progress)
@@ -384,7 +375,7 @@ def calculate_pixel_accuracy_optimized(input_dir, output_dir, filename, split_fo
     
     # 4. Calculate metrics
     OA, AA, class_accuracies = calculate_metrics_vectorized(
-        pixel_output, truth, label_map, num_classes, show_progress
+        pixel_output, truth, num_classes, show_progress
     )
     
     return OA, AA, class_accuracies
@@ -411,7 +402,6 @@ def calculate_pixel_accuracy_ultra_optimized(input_dir, output_dir, filename, sp
     train_val_indices = np.concatenate([split_info['train_indices'], 
                                        split_info['validation_indices']])
     num_classes = split_info['split_stats']['num_classes']
-    label_map = convert_label_map_to_int_keys(split_info['label_map'])
     
     # Predictions
     predictions = predict_patches_batch(dataloader, D, split_info['metadata']['batch_size'], 
@@ -443,15 +433,15 @@ def calculate_pixel_accuracy_ultra_optimized(input_dir, output_dir, filename, sp
         return 0.0, 0.0, [0.0] * (num_classes + 1)
         
     valid_pred = pixel_output[valid_mask]
-    valid_truth_mapped = np.array([label_map[truth[i]] for i in np.where(valid_mask)[0]])
+    valid_truth = np.array([truth[i] for i in np.where(valid_mask)[0]])
     
     # Vectorized metrics
-    correct_mask = (valid_pred == valid_truth_mapped)
+    correct_mask = (valid_pred == valid_truth)
     OA = np.mean(correct_mask)
     
     # AA using broadcasting and vectorized operations
     classes = np.arange(1, num_classes + 1)
-    class_masks = valid_truth_mapped[:, None] == classes[None, :]
+    class_masks = valid_truth[:, None] == classes[None, :]
     class_totals = np.sum(class_masks, axis=0)
     class_corrects = np.sum(correct_mask[:, None] & class_masks, axis=0)
     

@@ -150,4 +150,4 @@ fi
 python train.py --outdir="$OUTDIR" --cfg="$CFG" --data="$DATASET_ZIP" --cond=True \
   --gpus=$GPUS --batch=$BATCH --gamma=0.125 --batch-gpu=$BATCH_GPU \
   --kimg=$NUM_KIMG --tick=$TICK --snap=$SNAP --metrics=none \
-  --mirror=False --data-val=$DATASET_VAL_ZIP $OTHER_ARGS
+  --mirror=False --data-val=$DATASET_VAL_ZIP --use-label-map=True $OTHER_ARGS

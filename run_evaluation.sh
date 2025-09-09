@@ -1,17 +1,17 @@
 #!/bin/bash
 
 # Dataset name (can be: ermidas, oitaven, eiras, ...)
-DATASET_NAME="ermidas"
+DATASET_NAME="oitaven"
 
 # Uppercase version for network paths
 DATASET_NAME_UPPER=$(echo "$DATASET_NAME" | tr '[:lower:]' '[:upper:]')
 
 # List of network paths (relative paths)
 NETWORKS=(
-    "training-runs/${DATASET_NAME_UPPER}_TRAIN/00000-stylegan3-t-${DATASET_NAME}_train-gpus2-batch64-gamma0.125/network-snapshot-001266.pkl"
-    "training-runs/${DATASET_NAME_UPPER}_TRAIN/00001-stylegan3-t-${DATASET_NAME}_train-gpus2-batch64-gamma0.125/network-snapshot-001085.pkl"
-    "training-runs/${DATASET_NAME_UPPER}_TRAIN/00002-stylegan3-t-${DATASET_NAME}_train-gpus2-batch64-gamma0.125/network-snapshot-001175.pkl"
-    "training-runs/${DATASET_NAME_UPPER}_TRAIN/00003-stylegan3-t-${DATASET_NAME}_train-gpus2-batch64-gamma0.125/network-snapshot-001698.pkl"
+    "training-runs/${DATASET_NAME_UPPER}_TRAIN/00006-stylegan3-t-${DATASET_NAME}_train-gpus2-batch64-gamma0.125/network-snapshot-001406.pkl"
+    "training-runs/${DATASET_NAME_UPPER}_TRAIN/00007-stylegan3-t-${DATASET_NAME}_train-gpus2-batch64-gamma0.125/network-snapshot-001547.pkl"
+    "training-runs/${DATASET_NAME_UPPER}_TRAIN/00008-stylegan3-t-${DATASET_NAME}_train-gpus2-batch64-gamma0.125/network-snapshot-000713.pkl"
+    "training-runs/${DATASET_NAME_UPPER}_TRAIN/00009-stylegan3-t-${DATASET_NAME}_train-gpus2-batch64-gamma0.125/network-snapshot-000964.pkl"
 )
 
 # Derived paths based on dataset name

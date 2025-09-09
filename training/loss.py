@@ -27,7 +27,7 @@ class Loss:
 # ----------------------------------------------------------------------------
 
 
-def compute_class_prediction_accuracy(predictions, ground_truth):
+def compute_class_prediction_accuracy(predictions, ground_truth, label_map=None):
     """
     Computes a tensor per class with 1 for correctly classified instances
     and 0 for incorrectly classified instances.
@@ -35,6 +35,7 @@ def compute_class_prediction_accuracy(predictions, ground_truth):
     Args:
         predictions (torch.Tensor): Tensor of size (batch_size, dim_label) with predicted values.
         ground_truth (torch.Tensor): Tensor of size (batch_size,) with ground truth labels.
+        label_map (dict, optional): Mapping from class indices to actual class labels. Defaults to None.
 
     Returns:
         dict: Dictionary where each key is a class and the value is a tensor
@@ -55,13 +56,14 @@ def compute_class_prediction_accuracy(predictions, ground_truth):
         # Compare predictions with ground truth (1 if correct, 0 if incorrect)
         correct_tensor = (class_predictions == class_ground_truth).float().unsqueeze(1)
 
-        # Store the tensor in the dictionary
-        results_per_class[cls] = correct_tensor.squeeze(1)
+        # Store the tensor in the dictionary. If label_map is provided, use it to map class indices to actual class labels
+        mapped_cls = label_map[cls] if label_map else cls
+        results_per_class[mapped_cls] = correct_tensor.squeeze(1)
 
     return results_per_class
 
 
-def compute_confusion_matrix_dict(predictions, ground_truth, type="real"):
+def compute_confusion_matrix_dict(predictions, ground_truth, type="real", label_map=None):
     """
     Computes a confusion matrix in dictionary format.
 
@@ -69,6 +71,7 @@ def compute_confusion_matrix_dict(predictions, ground_truth, type="real"):
         predictions (torch.Tensor): Tensor of size (batch_size, dim_label) with predicted values.
         ground_truth (torch.Tensor): Tensor of size (batch_size,) with ground truth labels.
         type (str): Type of confusion matrix to compute, either "real" or "fake".
+        label_map (dict, optional): Mapping from class indices to actual class labels. Defaults to None.
 
     Returns:
         dict: Dictionary where each key is "Classification/{real_class}/{predicted_class}"
@@ -84,10 +87,9 @@ def compute_confusion_matrix_dict(predictions, ground_truth, type="real"):
     # Initialize the confusion matrix dictionary
     confusion_matrix_dict = {}
 
-    # Iterate over all possible real and predicted classes
-    num_classes = predictions.shape[1]
-    for real_class in range(num_classes):
-        for predicted_class in range(num_classes):
+    # Iterate over all possible pairs of real and predicted classes
+    for real_class in range(predictions.shape[1]):
+        for predicted_class in range(predictions.shape[1]):
             # Mask for instances where the real class matches `real_class`
             real_mask = ground_truth_classes == real_class
 
@@ -101,7 +103,9 @@ def compute_confusion_matrix_dict(predictions, ground_truth, type="real"):
             confusion_tensor = combined_mask.float().unsqueeze(1)
 
             # Store the tensor in the dictionary
-            key = f"Classification/{type}/{real_class}/{predicted_class}"
+            mapped_real_class = label_map[real_class] if label_map else real_class
+            mapped_predicted_class = label_map[predicted_class] if label_map else predicted_class
+            key = f"Classification/{type}/{mapped_real_class}/{mapped_predicted_class}"
             confusion_matrix_dict[key] = confusion_tensor.squeeze(1)
 
     return confusion_matrix_dict
@@ -123,6 +127,7 @@ class StyleGAN2Loss(Loss):
         blur_init_sigma=0,
         blur_fade_kimg=0,
         class_weight=0,
+        label_map=None,
     ):
         super().__init__()
         self.device = device
@@ -139,6 +144,7 @@ class StyleGAN2Loss(Loss):
         self.blur_init_sigma = blur_init_sigma
         self.blur_fade_kimg = blur_fade_kimg
         self.class_weight = class_weight
+        self.label_map = label_map
 
     def run_G(self, z, c, update_emas=False):
         ws = self.G.mapping(z, c, update_emas=update_emas)
@@ -221,10 +227,10 @@ class StyleGAN2Loss(Loss):
 
                 # Compute classification results per class (only reporting)
                 if phase in ["Dmain", "Dboth"] and gen_logits is not None:
-                    results_per_class = compute_class_prediction_accuracy(gen_logits, gen_c)
+                    results_per_class = compute_class_prediction_accuracy(gen_logits, gen_c, label_map=self.label_map)
                     for cls, classification_tensor in results_per_class.items():
                         training_stats.report(f"Accuracy/fake/{cls}", classification_tensor)
-                    confusion_matrix_dict = compute_confusion_matrix_dict(gen_logits, gen_c, type="fake")
+                    confusion_matrix_dict = compute_confusion_matrix_dict(gen_logits, gen_c, type="fake", label_map=self.label_map)
                     for key, confusion_tensor in confusion_matrix_dict.items():
                         training_stats.report(key, confusion_tensor)
 
@@ -255,10 +261,10 @@ class StyleGAN2Loss(Loss):
 
                 # Compute classification results per class (only reporting)
                 if phase in ["Dmain", "Dboth"] and real_logits is not None:
-                    results_per_class = compute_class_prediction_accuracy(real_logits, real_c)
+                    results_per_class = compute_class_prediction_accuracy(real_logits, real_c, label_map=self.label_map)
                     for cls, classification_tensor in results_per_class.items():
                         training_stats.report(f"Accuracy/real/{cls}", classification_tensor)
-                    confusion_matrix_dict = compute_confusion_matrix_dict(real_logits, real_c, type="real")
+                    confusion_matrix_dict = compute_confusion_matrix_dict(real_logits, real_c, type="real", label_map=self.label_map)
                     for key, confusion_tensor in confusion_matrix_dict.items():
                         training_stats.report(key, confusion_tensor)
 
@@ -296,10 +302,10 @@ class StyleGAN2Loss(Loss):
             _, real_logits = self.D(real_img, real_c)
 
             # Compute classification results per class and report
-            results_per_class = compute_class_prediction_accuracy(real_logits, real_c)
+            results_per_class = compute_class_prediction_accuracy(real_logits, real_c, label_map=self.label_map)
             for cls, classification_tensor in results_per_class.items():
                 training_stats.report(f"Accuracy/val/{cls}", classification_tensor)
-            confusion_matrix_dict = compute_confusion_matrix_dict(real_logits, real_c, type="val")
+            confusion_matrix_dict = compute_confusion_matrix_dict(real_logits, real_c, type="val", label_map=self.label_map)
             for key, confusion_tensor in confusion_matrix_dict.items():
                 training_stats.report(key, confusion_tensor)
 

@@ -46,7 +46,7 @@ def _create_label_map(patches_by_class):
     label_map = {}
 
     for class_idx in sorted(patches_by_class.keys()):
-        label_map[class_idx + 1] = class_idx
+        label_map[class_idx] = class_idx + 1
 
     return label_map
 

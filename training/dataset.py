@@ -33,12 +33,15 @@ class Dataset(torch.utils.data.Dataset):
         use_labels=False,  # Enable conditioning labels? False = label dimension is zero.
         xflip=False,  # Artificially double the size of the dataset via x-flips. Applied after max_size.
         random_seed=0,  # Random seed to use when applying max_size.
+        use_label_map=False,  # Whether to use a label map for integer labels. Useful when labels are not consecutive.
     ):
         self._name = name
         self._raw_shape = list(raw_shape)
         self._use_labels = use_labels
         self._raw_labels = None
         self._label_shape = None
+        self._use_label_map = use_label_map
+        self._label_map = None
 
         # Apply max_size.
         self._raw_idx = np.arange(self._raw_shape[0], dtype=np.int64)
@@ -64,6 +67,23 @@ class Dataset(torch.utils.data.Dataset):
                 assert self._raw_labels.ndim == 1
                 assert np.all(self._raw_labels >= 0)
         return self._raw_labels
+    
+    def get_label_map(self):
+        if self._use_label_map and self._label_map is None:
+            self._label_map = {}
+            raw_labels = self._get_raw_labels()
+            if raw_labels.dtype == np.int64:
+                unique_labels = np.unique(raw_labels)
+                self._label_map = {index: int(label) for index, label in enumerate(unique_labels)}
+        return self._label_map
+    
+    def get_rev_label_map(self):
+        label_map = self.get_label_map()
+        if label_map:
+            rev_label_map = {v: k for k, v in label_map.items()}
+            return rev_label_map
+        else:
+            return None
 
     def close(self):  # to be overridden by subclass
         pass
@@ -100,6 +120,9 @@ class Dataset(torch.utils.data.Dataset):
         label = self._get_raw_labels()[self._raw_idx[idx]]
         if label.dtype == np.int64:
             onehot = np.zeros(self.label_shape, dtype=np.float32)
+            if self._use_label_map:
+                rev_label_map = self.get_rev_label_map()
+                label = rev_label_map[label]
             onehot[label] = 1
             label = onehot
         return label.copy()
@@ -134,7 +157,9 @@ class Dataset(torch.utils.data.Dataset):
     def label_shape(self):
         if self._label_shape is None:
             raw_labels = self._get_raw_labels()
-            if raw_labels.dtype == np.int64:
+            if self._use_label_map:
+                self._label_shape = [len(self.get_label_map())]
+            elif raw_labels.dtype == np.int64:
                 self._label_shape = [int(np.max(raw_labels)) + 1]
             else:
                 self._label_shape = raw_labels.shape[1:]

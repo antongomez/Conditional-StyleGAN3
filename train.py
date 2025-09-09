@@ -148,6 +148,7 @@ def parse_comma_separated_list(s):
 @click.option('--cls-weight',   help='Weight of the classification loss', metavar='FLOAT',      type=click.FloatRange(min=0, max=1), default=0.0, show_default=True)
 @click.option('--uniform-class',help='Use uniform class labels', metavar='BOOL',                type=bool, default=False, show_default=True)
 @click.option('--disc-on-gen',  help='Run discriminator on generated images', metavar='BOOL',   type=bool, default=False, show_default=True)
+@click.option('--use-label-map',help='Use label map for non-consecutive integer labels', metavar='BOOL', type=bool, default=False, show_default=True)
 
 # Misc hyperparameters.
 @click.option('--p',            help='Probability for --aug=fixed', metavar='FLOAT',            type=click.FloatRange(min=0, max=1), default=0.2, show_default=True)
@@ -212,8 +213,10 @@ def main(**kwargs):
         raise click.ClickException('--cond=True requires labels specified in dataset.json')
     c.training_set_kwargs.use_labels = opts.cond
     c.training_set_kwargs.xflip = opts.mirror
+    c.training_set_kwargs.use_label_map = opts.use_label_map
     c.validation_set_kwargs.use_labels = opts.cond
     c.validation_set_kwargs.xflip = opts.mirror
+    c.validation_set_kwargs.use_label_map = opts.use_label_map
 
     # Hyperparameters & settings.
     c.num_gpus = opts.gpus
