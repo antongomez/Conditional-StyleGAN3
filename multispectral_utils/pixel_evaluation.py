@@ -25,23 +25,23 @@ def build_test_dataset(test_dataset_kwargs: dict = None, data_loader_kwargs: dic
     )  # subclass of training.dataset.Dataset
     print("Test dataset built")
 
-    test_dataset_iterator = torch.utils.data.DataLoader(
+    test_dataloader = torch.utils.data.DataLoader(
         dataset=test_dataset,
         batch_size=batch_size,
         **data_loader_kwargs,
     )
     print("Test dataset iterator built with batch size:", batch_size)
 
-    return test_dataset, test_dataset_iterator
+    return test_dataset, test_dataloader
 
-def build_discriminator(network_pkl: str):
+def build_discriminator(network_pkl: str, device: str = "cuda"):
     """Load a pretrained StyleGAN discriminator from a pickle file."""
     print(f'Loading networks from "{network_pkl}"...')
-    device = torch.device('cuda')
+    device = torch.device(device)
     with dnnlib.util.open_url(network_pkl) as f:
         D = legacy.load_network_pkl(f)["D"].to(device)  # type: ignore
     D.eval()
-    print('Discriminator network loaded.')
+    print("Discriminator network loaded.")
     return D, device
 
 def load_dataset_and_split_info(input_dir, output_dir, filename, split_format):
@@ -55,9 +55,10 @@ def load_dataset_and_split_info(input_dir, output_dir, filename, split_format):
         'split_info': split_info
     }
 
-def predict_patches_batch(dataloader, D, batch_size, device, show_progress=False):
+def predict_patches_batch(dataloader, D, device, label_map=None, show_progress=False):
     """Predict classes for all patches using the discriminator."""
     predictions = []
+    batch_size = dataloader.batch_size
     
     with torch.no_grad():
         if show_progress:
@@ -92,6 +93,8 @@ def predict_patches_batch(dataloader, D, batch_size, device, show_progress=False
             
             # Get predictions
             predicted_classes = torch.argmax(classification_logits, dim=1).cpu().numpy()
+            if label_map is not None:
+                predicted_classes = np.array([label_map[x] for x in predicted_classes])
             predictions.extend(predicted_classes + 1)  # +1 to adjust indexing
     
     return np.array(predictions)
@@ -131,7 +134,7 @@ def generate_pixel_classification_map(predictions, test_indices, centers, segmen
     
     return pixel_output
 
-def calculate_metrics_vectorized(pixel_output, truth, num_classes, show_progress=False):
+def calculate_metrics_vectorized(pixel_output, truth, num_classes, label_map=None, show_progress=False):
     """Calculate OA and AA metrics using vectorized operations."""
     if show_progress:
         print("Calculating metrics...")
@@ -143,9 +146,14 @@ def calculate_metrics_vectorized(pixel_output, truth, num_classes, show_progress
     # Create masks for valid pixels
     valid_mask = (pixel_output != 0) & (truth != 0)
     valid_pixels = np.sum(valid_mask)
+
+    if label_map:
+        class_idxs = [class_idx+1 for class_idx in label_map.values()]
+    else:
+        class_idxs = list(range(1, num_classes + 1))
     
     if valid_pixels == 0:
-        return 0.0, 0.0, [0.0] * (num_classes + 1)
+        return 0.0, 0.0, dict((class_id, 0.0) for class_id in class_idxs)
     
     # Get predictions and truths for valid pixels
     valid_predictions = pixel_output[valid_mask]
@@ -156,9 +164,9 @@ def calculate_metrics_vectorized(pixel_output, truth, num_classes, show_progress
     OA = np.sum(correct_predictions) / valid_pixels
     
     # Calculate AA using vectorized operations
-    class_accuracies = np.zeros(num_classes + 1)
+    class_accuracies = {}
     
-    for class_id in range(1, num_classes + 1):
+    for class_id in class_idxs:
         class_mask = (valid_truth == class_id)
         class_total = np.sum(class_mask)
         
@@ -169,9 +177,9 @@ def calculate_metrics_vectorized(pixel_output, truth, num_classes, show_progress
             class_accuracies[class_id] = 0.0
     
     # Calculate average AA (excluding class 0)
-    AA = np.mean(class_accuracies[1:num_classes + 1])
+    AA = np.mean(list(class_accuracies.values()))
     
-    return OA, AA, class_accuracies.tolist()
+    return OA, AA, class_accuracies
 
 import numpy as np
 import matplotlib.pyplot as plt
@@ -222,7 +230,7 @@ def compare_pixel_outputs(arr1, arr2, shape=None, save_path=None, max_diff_repor
 
 
 
-def calculate_pixel_accuracy(input_dir, output_dir, filename, split_format, dataloader, D, device, show_progress=False):
+def calculate_pixel_accuracy(input_dir, output_dir, filename, split_format, dataloader, D, device, label_map=None, show_progress=False):
     """
     Computes pixel-wise accuracy from classifier predictions over image patches.
     """
@@ -241,8 +249,10 @@ def calculate_pixel_accuracy(input_dir, output_dir, filename, split_format, data
     train_indices = split_info['train_indices']
     validation_indices = split_info['validation_indices']
     test_indices = split_info['test_indices']
-    batch_size = split_info['metadata']['batch_size']
     num_classes = split_info['split_stats']['num_classes']
+
+    # Get batch size from dataloader
+    batch_size = dataloader.batch_size
 
     # Initialize output array
     total_centers = 0
@@ -340,7 +350,7 @@ def calculate_pixel_accuracy(input_dir, output_dir, filename, split_format, data
     return OA, AA, class_accuracies
 
 def calculate_pixel_accuracy_optimized(input_dir, output_dir, filename, split_format, 
-                                     dataloader, D, device, show_progress=False):
+                                     dataloader, D, device, label_map=None, show_progress=False):
     """
     Optimized version of calculate_pixel_accuracy with vectorized operations
     and improved modularization.
@@ -361,11 +371,10 @@ def calculate_pixel_accuracy_optimized(input_dir, output_dir, filename, split_fo
     train_indices = split_info['train_indices']
     validation_indices = split_info['validation_indices']
     test_indices = split_info['test_indices']
-    batch_size = split_info['metadata']['batch_size']
     num_classes = split_info['split_stats']['num_classes']
     
     # 2. Patch predictions
-    predictions = predict_patches_batch(dataloader, D, batch_size, device, show_progress)
+    predictions = predict_patches_batch(dataloader, D, device, label_map, show_progress)
     
     # 3. Generate pixel classification map
     pixel_output = generate_pixel_classification_map(
@@ -375,14 +384,14 @@ def calculate_pixel_accuracy_optimized(input_dir, output_dir, filename, split_fo
     
     # 4. Calculate metrics
     OA, AA, class_accuracies = calculate_metrics_vectorized(
-        pixel_output, truth, num_classes, show_progress
+        pixel_output, truth, num_classes, label_map, show_progress
     )
     
     return OA, AA, class_accuracies
 
 # Alternative version with pre-computed masks for greater efficiency
 def calculate_pixel_accuracy_ultra_optimized(input_dir, output_dir, filename, split_format, 
-                                           dataloader, D, device, show_progress=False):
+                                           dataloader, D, device, label_map=None, show_progress=False):
     """
     Ultra-optimized version that pre-computes masks and uses fully 
     vectorized operations.
@@ -404,8 +413,7 @@ def calculate_pixel_accuracy_ultra_optimized(input_dir, output_dir, filename, sp
     num_classes = split_info['split_stats']['num_classes']
     
     # Predictions
-    predictions = predict_patches_batch(dataloader, D, split_info['metadata']['batch_size'], 
-                                      device, show_progress)
+    predictions = predict_patches_batch(dataloader, D, device, label_map, show_progress)
     
     # Create base map
     pixel_output = np.zeros(image_size, dtype=np.uint8)

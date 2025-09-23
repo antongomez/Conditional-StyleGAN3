@@ -190,7 +190,6 @@ def training_loop(
     # Add output_dim to epilogue_kwargs to perform classification
     D_kwargs.epilogue_kwargs.output_dim = training_set.label_shape[0] if training_set.has_labels and loss_kwargs.class_weight > 0 else 0
     # Pass label_map to loss class
-    print(f"Training set kwargs: {training_set_kwargs.use_label_map}")
     loss_kwargs.label_map = training_set.get_label_map() if training_set.has_labels and training_set_kwargs.use_label_map else None
 
     G = (
