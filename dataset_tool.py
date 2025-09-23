@@ -220,8 +220,8 @@ def open_mnist(images_gz: str, *, max_images: Optional[int]):
 
     images = images.reshape(-1, 28, 28)
     images = np.pad(images, [(0, 0), (2, 2), (2, 2)], "constant", constant_values=0)
-    assert images.shape == (60000, 32, 32) and images.dtype == np.uint8
-    assert labels.shape == (60000,) and labels.dtype == np.uint8
+    assert (images.shape == (60000, 32, 32) or images.shape == (10000, 32, 32)) and images.dtype == np.uint8
+    assert (labels.shape == (60000,) or labels.shape == (10000,)) and labels.dtype == np.uint8
     assert np.min(images) == 0 and np.max(images) == 255
     assert np.min(labels) == 0 and np.max(labels) == 9
 
@@ -304,7 +304,7 @@ def open_dataset(source, *, max_images: Optional[int]):
     elif os.path.isfile(source):
         if os.path.basename(source) == "cifar-10-python.tar.gz":
             return open_cifar10(source, max_images=max_images)
-        elif os.path.basename(source) == "train-images-idx3-ubyte.gz":
+        elif os.path.basename(source) == "train-images-idx3-ubyte.gz" or os.path.basename(source) == "t10k-images-idx3-ubyte.gz":
             return open_mnist(source, max_images=max_images)
         elif file_ext(source) == "zip":
             return open_image_zip(source, max_images=max_images)
