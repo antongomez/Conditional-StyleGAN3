@@ -170,6 +170,48 @@ def compare_optimization_methods(input_dir, output_dir, filename, split_format, 
 
     return results
 
+def output_csv_line(output_dir, output_filename, experiment_name, dataset_name, training_options, best_tick_kimg, oa_test, aa_test, oa_val, aa_val, class_accuracies):
+    """
+    Write a line to the results CSV file.
+
+    Args:
+        output_dir (str): Directory to save the CSV file
+        output_filename (str): Name of the CSV file
+        experiment_name (str): Directory name of the experiment so it can be traced back
+        dataset_name (str): Name of the dataset
+        training_options (dict): Dictionary of training options
+        oa_test (float): Overall Accuracy on test set
+        aa_test (float): Average Accuracy on test set
+        oa_val (float): Overall Accuracy on validation set
+        aa_val (float): Average Accuracy on validation set
+        class_accuracies (list): List of class accuracies
+    """
+    os.makedirs(output_dir, exist_ok=True)
+    csv_path = os.path.join(output_dir, output_filename)
+
+    # Check valid training options keys
+    valid_keys = {"uniform_class", "disc_on_gen", "autoencoder"}
+    for key in training_options.keys():
+        if key not in valid_keys:
+            raise ValueError(f"Invalid training option key: {key}. Valid keys are: {valid_keys}")
+
+    # Create header if file does not exist
+    if not os.path.exists(csv_path):
+        with open(csv_path, 'w') as f:
+            headers = ["experiment_name", "dataset"] + list(training_options.keys()) + ["best_tick_kimg", "oa_test", "aa_test", "oa_val", "aa_val"] + [str(i) for i in range(1, 11)]  # Assuming max 10 classes
+            f.write(",".join(headers) + "\n")
+
+    # Fill class accuracies to ensure consistent number of columns
+    class_accuracies_list = [None] * 10
+    for i in range(1, 11):
+        if i in class_accuracies:
+            class_accuracies_list[i - 1] = f"{class_accuracies[i]:.6f}"
+
+    # Write data line
+    with open(csv_path, 'a') as f:
+        values = [experiment_name, dataset_name] + list(training_options.values()) + [f"{float(best_tick_kimg):.3f}", f"{oa_test:.6f}", f"{aa_test:.6f}", f"{oa_val:.6f}", f"{aa_val:.6f}"] + class_accuracies_list
+        f.write(",".join(map(str, values)) + "\n")
+
 def main():
     """Main function for discriminator evaluation."""
     parser = argparse.ArgumentParser(description="Evaluate a pretrained StyleGAN discriminator on multispectral images")
@@ -202,6 +244,8 @@ def main():
                        help="Compare execution times of different optimization methods")
     parser.add_argument("--write-report", action="store_true",
                        help="Write evaluation results to a report file")
+    parser.add_argument("--output-csv", type=str, default="results.csv",
+                       help="Output CSV filename for results (default: results.csv)")
 
     args = parser.parse_args()
 
@@ -213,10 +257,8 @@ def main():
         warnings.warn("Both --network and --experiment-dir are provided. The network will be used.", UserWarning)
 
     if args.experiment_dir is not None:
-        print(f"Extracting data from jsonl file {os.path.join(args.experiment_dir, 'stats.jsonl')}...")
         jsonl_data = read_jsonl(os.path.join(args.experiment_dir, "stats.jsonl"))
 
-        print(f"Extracting label map from {os.path.join(args.experiment_dir, 'processing_summary.json')}...")
         with open(os.path.join(args.output_dir, "processing_summary.json"), "r") as f:
             summary = json.load(f)
         label_map = summary.get("label_map", {})
@@ -228,21 +270,18 @@ def main():
         print(f"Selected network: {args.network_pkl}")
         print(f"Best tick based on validation AA: {int(best_tick_performance['tick'])} with AA: {best_tick_performance['avg_accuracy_val']:.4f} and OA: {best_tick_performance['overall_accuracy_val']:.4f}")
 
-        if args.remove:
-            print("Now is disabled this option. Continuing without removing other .pkl files...")
-            
-            # print("Removing other .pkl files...")
-            # deleted_count = 0
-            # freed_bytes = 0
+        if args.remove:           
+            print("Removing other .pkl files...")
+            deleted_count = 0
+            freed_bytes = 0
 
-            # for pkl_file in glob.glob(os.path.join(args.experiment_dir, "*.pkl")):
-            #     if os.path.abspath(pkl_file) != os.path.abspath(args.network_pkl):
-            #         file_size = os.path.getsize(pkl_file)  # tamaño en bytes
-            #         os.remove(pkl_file)
-            #         deleted_count += 10
-            #         freed_bytes += file_size
-            # print(f"Cleanup complete. Deleted {deleted_count} files, freeing {freed_bytes / (1024 * 1024 * 1024):.2f} GB.")
-            # return
+            for pkl_file in glob.glob(os.path.join(args.experiment_dir, "*.pkl")):
+                if os.path.abspath(pkl_file) != os.path.abspath(args.network_pkl):
+                    file_size = os.path.getsize(pkl_file) 
+                    os.remove(pkl_file)
+                    deleted_count += 1
+                    freed_bytes += file_size
+            print(f"Cleanup complete. Deleted {deleted_count} files, freeing {freed_bytes / (1024 * 1024 * 1024):.2f} GB.")
 
 
     print("Loading discriminator...")
@@ -329,6 +368,46 @@ def main():
                 network_path=args.network_pkl
             )
 
+        # Write to CSV if requested
+        if args.output_csv:
+            if args.experiment_dir is None: 
+                # Get the dir from the network path
+                args.experiment_dir = os.path.dirname(args.network_pkl)
+
+                # Also, get best tick performance from the jsonl file if possible
+                jsonl_data = read_jsonl(os.path.join(args.experiment_dir, "stats.jsonl"))
+                print(f"Extracting label map from {os.path.join(args.experiment_dir, 'processing_summary.json')}...")
+
+                with open(os.path.join(args.output_dir, "processing_summary.json"), "r") as f:
+                    summary = json.load(f)
+                label_map = summary.get("label_map", {})
+                class_labels = [int(label) for label in label_map.keys()]
+                print(f"Class labels found: {class_labels}")
+
+                best_tick_performance = extract_best_tick(jsonl_data, class_labels, performance_key="avg", verbose=False, only_tick_with_pkl=True, network_snapshot_ticks=1)
+
+            with open(os.path.join(args.experiment_dir, "training_options.json"), "r") as f:
+                training_options = json.load(f)
+            training_options = {
+                "uniform_class": training_options.get("uniform_class_labels", None),
+                "disc_on_gen": training_options.get("disc_on_gen", None),
+                "autoencoder": training_options.get("autoencoder", None)
+            }
+            output_dir = "."
+            output_csv_line(
+                output_dir=output_dir,
+                output_filename=args.output_csv,
+                experiment_name=os.path.basename(args.experiment_dir),
+                dataset_name=args.filename,
+                training_options=training_options,
+                best_tick_kimg=best_tick_performance['kimg'],
+                oa_test=OA,
+                aa_test=AA,
+                oa_val=best_tick_performance.get('overall_accuracy_val', None),
+                aa_val=best_tick_performance.get('avg_accuracy_val', None),
+                class_accuracies=class_accuracies
+            )
+            print(f"Results written to {os.path.join(output_dir, args.output_csv)}")
 
 if __name__ == '__main__':
     main()

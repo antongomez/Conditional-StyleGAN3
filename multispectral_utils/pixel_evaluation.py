@@ -44,9 +44,9 @@ def build_discriminator(network_pkl: str, device: str = "cuda"):
     print("Discriminator network loaded.")
     return D, device
 
-def load_dataset_and_split_info(input_dir, output_dir, filename, split_format):
+def load_dataset_and_split_info(input_dir, output_dir, filename, split_format, read_raw_data=True):
     """Load dataset information and data split configuration."""
-    dataset = load_multispectral_dataset(input_dir, filename)
+    dataset = load_multispectral_dataset(input_dir, filename, read_raw_data=read_raw_data)
     split_file = os.path.join(output_dir, f"split_info.{split_format}")
     split_info = load_split_info(split_file, split_format)
     
@@ -236,7 +236,7 @@ def calculate_pixel_accuracy(input_dir, output_dir, filename, split_format, data
     """
 
     # Load multispectral image data and segmentation
-    dataset = load_multispectral_dataset(input_dir, filename)
+    dataset = load_multispectral_dataset(input_dir, filename, read_raw_data=False)
     centers = dataset['centers']
     truth = dataset['truth']
     segmentation_data = dataset['segmentation_data']
@@ -356,7 +356,7 @@ def calculate_pixel_accuracy_optimized(input_dir, output_dir, filename, split_fo
     and improved modularization.
     """
     # 1. Load data
-    data_info = load_dataset_and_split_info(input_dir, output_dir, filename, split_format)
+    data_info = load_dataset_and_split_info(input_dir, output_dir, filename, split_format, read_raw_data=False)
     dataset = data_info['dataset']
     split_info = data_info['split_info']
     
@@ -397,7 +397,7 @@ def calculate_pixel_accuracy_ultra_optimized(input_dir, output_dir, filename, sp
     vectorized operations.
     """
     # Load data
-    data_info = load_dataset_and_split_info(input_dir, output_dir, filename, split_format)
+    data_info = load_dataset_and_split_info(input_dir, output_dir, filename, split_format, read_raw_data=False)
     dataset = data_info['dataset']
     split_info = data_info['split_info']
     

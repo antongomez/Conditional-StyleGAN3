@@ -110,7 +110,7 @@ def read_seg_centers(filename):
     return segment_centers, image_height, image_width, nseg
 
 
-def load_multispectral_dataset(input_dir, filename):
+def load_multispectral_dataset(input_dir, filename, read_raw_data=True):
     """
     Load a complete multispectral dataset (raw data, ground truth, and segment centers).
     
@@ -135,8 +135,13 @@ def load_multispectral_dataset(input_dir, filename):
     seg_file = os.path.join(input_dir, f"seg_{filename}_wp.raw")
     
     # Read all data
-    data, image_height, image_width, num_channels = read_raw(raw_file)
+    if read_raw_data:
+        data, image_height, image_width, num_channels = read_raw(raw_file)
     truth, gt_height, gt_width = read_pgm(gt_file)
+    if not read_raw_data:
+        data = None
+        image_height, image_width = gt_height, gt_width
+        num_channels = 5  # only is used when evaluating so, we can hardcode 5 channels
     centers, centers_height, centers_width, nseg = read_seg_centers(centers_file)
     segmentation_data, segmentation_height, segmentation_width = read_seg(seg_file)
     
@@ -145,7 +150,8 @@ def load_multispectral_dataset(input_dir, filename):
         f"Data and GT dimensions do not match: {image_height}x{image_width} vs {gt_height}x{gt_width}"
     
     # Transpose data to band-vector format for convolutions
-    data = np.transpose(data, (2, 0, 1))
+    if data is not None:
+        data = np.transpose(data, (2, 0, 1))
     
     return {
         'data': data,
