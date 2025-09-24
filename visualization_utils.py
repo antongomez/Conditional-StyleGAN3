@@ -175,8 +175,6 @@ def summarize_training_options(json_path):
     ada_target_present = "ada_target" in config
     ada_target_value = config.get("ada_target") if ada_target_present else None
 
-    print(label_map)
-
     print("📋 Training Configuration Summary")
     print("────────────────────────────────────")
     print(f"⚖️  Class weight: {class_weight}")

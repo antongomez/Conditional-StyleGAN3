@@ -1,5 +1,8 @@
 #!/bin/bash
 
+# Force use of dot as decimal separator
+export LC_NUMERIC=C
+
 is_power_of_two() {
   local n=$1
   (( n > 0 )) && (( (n & (n-1)) == 0 ))
@@ -15,6 +18,7 @@ CFG="stylegan3-t"
 TICK=10
 SNAP=1
 DRY_RUN=False
+GAMMA=0.125
 
 # Parse arguments
 for arg in "$@"; do
@@ -118,7 +122,7 @@ if [ "$EPOCHS" -gt 0 ]; then
 
 else
   NUM_KIMG=1500  # Default value
-  echo "* Using default kimg: $NUM_KIMG"
+  echo ">>> Using default kimg: $NUM_KIMG"
 fi
 
 # Print configuration
@@ -140,6 +144,44 @@ else
   echo "  other args   = (none)"
 fi
 
+# Get all subdirectories inside $OUTDIR that start with numbers
+prev_run_dirs=($(find "$OUTDIR" -maxdepth 1 -type d -printf "%f\n" | grep -E '^[0-9]+' || true))
+
+echo "Found ${#prev_run_dirs[@]} previous run directories."
+
+# If there are previous run directories, extract numeric prefixes; otherwise use -1
+if [[ ${#prev_run_dirs[@]} -gt 0 ]]; then
+    prev_run_ids=()
+    for d in "${prev_run_dirs[@]}"; do
+        id=$(echo "$d" | grep -oE '^[0-9]+')
+        prev_run_ids+=("$id")
+    done
+
+    if [[ ${#prev_run_ids[@]} -gt 0 ]]; then
+        # Remove leading zeros to avoid octal interpretation
+        max_id=$(printf "%s\n" "${prev_run_ids[@]}" | sed 's/^0*//' | sort -n | tail -n 1)
+        # If empty (e.g. "00000"), force to 0
+        [[ -z "$max_id" ]] && max_id=0
+    fi
+else
+    max_id=-1
+fi
+
+# Compute new run ID (+1 from max)
+cur_run_id=$((max_id + 1))
+
+# Format run directory with zero-padded ID (5 digits) and other params
+run_dir=$(LC_NUMERIC=C printf "%s/%05d-%s-%s-gpus%d-batch%d-gamma%.3f" \
+    "$OUTDIR" "$cur_run_id" "${CFG}" "${DATASET}" "$GPUS" "$BATCH" "$GAMMA")
+
+echo ">>> Run directory will be: $run_dir"
+
+# Make sure it does not already exist
+if [[ -e "$run_dir" ]]; then
+    echo "ERROR: $run_dir already exists!"
+    exit 1
+fi
+
 # Check if dry run is enabled
 if [[ "${DRY_RUN,,}" == "true" ]]; then
   echo "Dry run enabled. Exiting without training."
@@ -151,3 +193,22 @@ python train.py --outdir="$OUTDIR" --cfg="$CFG" --data="$DATASET_ZIP" --cond=Tru
   --gpus=$GPUS --batch=$BATCH --gamma=0.125 --batch-gpu=$BATCH_GPU \
   --kimg=$NUM_KIMG --tick=$TICK --snap=$SNAP --metrics=none \
   --mirror=False --data-val=$DATASET_VAL_ZIP --use-label-map=True $OTHER_ARGS
+
+echo ">>> Training completed. Models and logs are saved in: $run_dir"
+
+FILENAME="${DATASET%_train}"
+EXPERIMENT_DIR="$run_dir"
+INPUT_DIR="data/${FILENAME}"
+DATA_ZIP="data/${FILENAME}_test.zip"
+OUTPUT_DIR="data/${FILENAME}/patches"
+
+# Run the evaluation command for each network
+python evaluate_pixel_accuracy.py \
+    --experiment-dir="$EXPERIMENT_DIR" \
+    --input-dir="$INPUT_DIR" \
+    --filename="$FILENAME" \
+    --data-zip="$DATA_ZIP" \
+    --output-dir="$OUTPUT_DIR" \
+    --write-report \
+    --remove \
+    --output-csv="experiments_accuracies.csv"
