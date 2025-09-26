@@ -492,7 +492,7 @@ def training_loop(
                     val_real_c = val_real_c.to(device).split(batch_gpu)
 
                     for real_img, real_c in zip(val_real_img, val_real_c):
-                        loss.evaluate_discriminator(real_img=real_img, real_c=real_c)
+                        loss.evaluate_discriminator(real_img=real_img, real_c=real_c, batch_size=batch_gpu)
             if rank == 0:
                 print("Finished!")
 

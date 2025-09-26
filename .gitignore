@@ -19,6 +19,9 @@ job_outputs/
 *.err
 *.out
 
+# Ignore csv with results
+*.csv
+
 # Ignore singularity files
 *.sif
 

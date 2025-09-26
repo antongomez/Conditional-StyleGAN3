@@ -296,10 +296,31 @@ class StyleGAN2Loss(Loss):
             with torch.autograd.profiler.record_function(name + "_backward"):
                 (loss_Dtotal + loss_Dr1).mean().mul(gain).backward()
 
-    def evaluate_discriminator(self, real_img, real_c):
+    def evaluate_discriminator(self, real_img, real_c, batch_size=None):
+        if batch_size is not None:
+            assert real_img.shape[0] <= batch_size, "Batch size must be equal or larger than the number of images."
+            assert real_c.shape[0] <= batch_size, "Batch size must be equal or larger than the number of images."
+
+        print(f"Evaluating discriminator with batch size {real_img.shape[0]} (expected: {batch_size})")
+        if batch_size is not None and real_img.shape[0] < batch_size:
+            # If the last batch is smaller than batch_size, we need to pad it
+            actual_batch_size = real_img.shape[0]
+            pad_size = batch_size - actual_batch_size
+
+            pad_images = torch.zeros((pad_size, *real_img.shape[1:]), dtype=real_img.dtype, device=real_img.device)
+            real_img = torch.cat([real_img, pad_images], dim=0)
+
+            pad_c = torch.zeros((pad_size, *real_c.shape[1:]), dtype=real_c.dtype, device=real_c.device)
+            real_c = torch.cat([real_c, pad_c], dim=0)
+
         self.D.eval()
         with torch.no_grad():
             _, real_logits = self.D(real_img, real_c)
+
+            if batch_size is not None and actual_batch_size < batch_size:
+                # Remove the padded elements
+                real_logits = real_logits[: actual_batch_size]
+                real_c = real_c[: actual_batch_size]
 
             # Compute classification results per class and report
             results_per_class = compute_class_prediction_accuracy(real_logits, real_c, label_map=self.label_map)
