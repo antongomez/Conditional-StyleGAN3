@@ -4,7 +4,7 @@
 data/
 
 # Ignore train results
-training-runs/
+training-runs*/
 
 # Ignore trained networks
 networks/
@@ -14,7 +14,7 @@ networks/
 out/
 
 # Ignore scripts to run jobs in slurm and outputs
-run_job*.sh
+scripts/
 job_outputs/
 *.err
 *.out

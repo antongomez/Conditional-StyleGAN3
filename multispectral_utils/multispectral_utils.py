@@ -220,7 +220,7 @@ def create_split_distribution_table(dataset_json_paths):
     return table_lines
 
 
-def create_dataset_report(output_dir, split_format='json'):
+def create_dataset_report(output_dir, split_format='json', seed=None):
     """
     Create a comprehensive report of the processed dataset.
     
@@ -283,7 +283,7 @@ def create_dataset_report(output_dir, split_format='json'):
             report_lines.append("")
     
     # Save report
-    report_file = os.path.join(output_dir, "dataset_report.txt")
+    report_file = os.path.join(output_dir, f"dataset_report{'_' + str(seed) if seed else ''}.txt")
     with open(report_file, 'w') as f:
         f.write("\n".join(report_lines))
     

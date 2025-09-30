@@ -8,7 +8,6 @@ from multispectral_utils import (
     load_processed_dataset,
     create_dataset_report,
     validate_dataset_integrity,
-    build_discriminator
 )
 
 
@@ -17,10 +16,6 @@ def main():
     parser = argparse.ArgumentParser(description="Process multispectral images using the utilities package")
     
     # Add arguments
-    parser.add_argument("--input-dir", type=str, default="data/oitaven/", 
-                       help="Input directory containing the raw, pgm, and segment center files")
-    parser.add_argument("--output-dir", type=str, default="data/oitaven/patches/", 
-                       help="Output directory to save the patches")
     parser.add_argument("--filename", type=str, default="oitaven", 
                        help="Base filename (without extension)")
     parser.add_argument("--rgb", action="store_true", default=False, 
@@ -45,6 +40,8 @@ def main():
                        help="Mode of operation (default: process)")
     
     args = parser.parse_args()
+    input_dir = f"./data/{args.filename}"
+    output_dir = f"./data/{args.filename}/patches"
     
     if args.mode == "process":
         print("=" * 60)
@@ -53,9 +50,9 @@ def main():
         
         # Process the dataset
         results = process_multispectral_dataset(
-            input_dir=args.input_dir,
+            input_dir=input_dir,
             filename=args.filename,
-            output_dir=args.output_dir,
+            output_dir=output_dir,
             train_size=args.train_size,
             val_size=args.validation_size,
             patch_size=args.patch_size,
@@ -66,10 +63,10 @@ def main():
         )
         
         # Generate report
-        create_dataset_report(args.output_dir, args.split_format)
+        create_dataset_report(output_dir, args.split_format, seed=args.seed)
         
         # Validate integrity
-        validation_results = validate_dataset_integrity(args.output_dir, args.split_format)
+        validation_results = validate_dataset_integrity(output_dir, args.split_format)
         if validation_results['valid']:
             print("✓ Dataset integrity validation passed")
         else:
@@ -85,9 +82,9 @@ def main():
         print("=" * 60)
         
         # Load previously processed dataset
-        dataset = load_processed_dataset(args.output_dir, args.split_format)
+        dataset = load_processed_dataset(output_dir, args.split_format)
         
-        print(f"Loaded dataset from: {args.output_dir}")
+        print(f"Loaded dataset from: {output_dir}")
         print(f"Available splits: {list(dataset['dataset_json_paths'].keys())}")
         
         # Display split statistics
@@ -100,7 +97,7 @@ def main():
         print("=" * 60)
         
         # Generate comprehensive report
-        report_file = create_dataset_report(args.output_dir, args.split_format)
+        report_file = create_dataset_report(output_dir, args.split_format, seed=args.seed)
         print(f"Report generated: {report_file}")
         
         # Display report content
@@ -113,7 +110,7 @@ def main():
         print("=" * 60)
         
         # Validate dataset integrity
-        validation_results = validate_dataset_integrity(args.output_dir, args.split_format)
+        validation_results = validate_dataset_integrity(output_dir, args.split_format)
         
         if validation_results['valid']:
             print("✓ Dataset integrity validation passed")
