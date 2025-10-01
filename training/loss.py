@@ -301,7 +301,6 @@ class StyleGAN2Loss(Loss):
             assert real_img.shape[0] <= batch_size, "Batch size must be equal or larger than the number of images."
             assert real_c.shape[0] <= batch_size, "Batch size must be equal or larger than the number of images."
 
-        print(f"Evaluating discriminator with batch size {real_img.shape[0]} (expected: {batch_size})")
         if batch_size is not None and real_img.shape[0] < batch_size:
             # If the last batch is smaller than batch_size, we need to pad it
             actual_batch_size = real_img.shape[0]
@@ -317,7 +316,7 @@ class StyleGAN2Loss(Loss):
         with torch.no_grad():
             _, real_logits = self.D(real_img, real_c)
 
-            if batch_size is not None and actual_batch_size < batch_size:
+            if batch_size is not None and real_img.shape[0] < batch_size:
                 # Remove the padded elements
                 real_logits = real_logits[: actual_batch_size]
                 real_c = real_c[: actual_batch_size]
