@@ -27,3 +27,6 @@ job_outputs/
 
 # Ignore venvironment files
 *_venv/
+
+# Ignore Gimini files
+GEMINI.md
