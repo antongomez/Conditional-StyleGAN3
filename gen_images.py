@@ -10,17 +10,17 @@
 
 import os
 import re
+from itertools import product
 from typing import List, Optional, Tuple, Union
 
 import click
-import dnnlib
+import matplotlib.pyplot as plt
 import numpy as np
 import PIL.Image
 import torch
-from itertools import product
 from tqdm import tqdm
-import matplotlib.pyplot as plt
 
+import dnnlib
 import legacy
 
 # ----------------------------------------------------------------------------
@@ -143,15 +143,55 @@ def save_image_grid(img, fname, drange, grid_size):
     img = img.transpose(0, 2, 1, 3, 4)
     img = img.reshape([gh * H, gw * W, C])
 
-    if C == 5:
-        img = img[:, :, [2, 1, 0]]  # Select rgb channels
-        C = 3
-
-    assert C in [1, 3]
+    assert C in [1, 3, 5]
     if C == 1:
         PIL.Image.fromarray(img[:, :, 0], "L").save(fname)
     if C == 3:
         PIL.Image.fromarray(img, "RGB").save(fname)
+    if C == 5:
+        PIL.Image.fromarray(img[:, :, [2, 1, 0]], "RGB").save(fname)  # Select rgb channels
+        # Save as raw image with all channels
+        save_raw_image(fname.replace(".png", ".raw"), img)
+
+
+# ----------------------------------------------------------------------------
+
+
+def save_raw_image(filename: str, image: np.ndarray):
+    """
+    Save a multi-channel image to a .raw file in the format:
+    [num_channels, height, width] (uint32) + image data (uint32).
+
+    The image is scaled to the range [0, 65535] (uint16) based on its current range,
+    which can be [-1, 1], [0, 1], or [0, 255].
+
+    Args:
+        filename (str): path to the output .raw file
+        image (np.ndarray): array with shape (height, width, num_channels)
+    """
+    if image.ndim != 3:
+        raise ValueError("Image must have 3 dimensions: (height, width, num_channels)")
+
+    height, width, num_channels = image.shape
+    image = image.astype(np.float64)
+
+    # Normalize and scale to uint16 range [0, 65535]
+    if image.min() >= -1 and image.max() <= 1:
+        image = ((image + 1) / 2 * 65535).clip(0, 65535).astype(np.uint32)
+    elif image.min() >= 0 and image.max() <= 1:
+        image = (image * 65535).clip(0, 65535).astype(np.uint32)
+    elif image.min() >= 0 and image.max() <= 255:
+        image = ((image / 255.0) * 65535).clip(0, 65535).astype(np.uint32)
+    else:
+        raise ValueError("Image values must be in range [-1, 1], [0, 1], or [0, 255].")
+
+    # Header remains uint32
+    header = np.array([num_channels, height, width], dtype=np.uint32)
+
+    # Write file
+    with open(filename, "wb") as f:
+        header.tofile(f)
+        image.tofile(f)  # image is saved also as uint32
 
 
 # ----------------------------------------------------------------------------
@@ -231,7 +271,7 @@ def generate_images(
     if classes is None:
         # Generate images in the same way as it was done previously in the repo.
         for seed_idx, seed in enumerate(seeds):
-            print("Generating image for seed %d (%d/%d) ..." % (seed, seed_idx, len(seeds)))
+            print("Generating image for seed %d (%d/%d) ..." % (seed, seed_idx + 1, len(seeds)))
             class_imgs = noise_to_images(
                 G,
                 seed,
@@ -245,8 +285,16 @@ def generate_images(
             img = class_imgs[0]
             if img.shape[-1] == 1:
                 PIL.Image.fromarray(img[:, :, 0].numpy(), "L").save(f"{outdir}/seed{seed:04d}.png")
-            else:
+            elif img.shape[-1] == 3:
                 PIL.Image.fromarray(img.numpy(), "RGB").save(f"{outdir}/seed{seed:04d}.png")
+            elif img.shape[-1] == 5:
+                # RGB + NIR + IR -> Save RGB
+                PIL.Image.fromarray(img[:, :, [2, 1, 0]].numpy(), "RGB").save(f"{outdir}/seed{seed:04d}.png")
+                # Save as raw image with all channels
+                save_raw_image(f"{outdir}/seed{seed:04d}.raw", img.numpy())
+            else:
+                raise ValueError(f"Unexpected number of channels: {img.shape[-1]}")
+
     else:
         # Generate as many images as there are classes. Use a different seed for each class.
         all_images = []
