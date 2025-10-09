@@ -8,24 +8,23 @@
 
 """Main training loop."""
 
-import os
-import time
 import copy
 import json
+import os
 import pickle
-import psutil
-import PIL.Image
+import time
+
 import numpy as np
+import PIL.Image
+import psutil
 import torch
-import dnnlib
-from torch_utils import misc
-from torch_utils import training_stats
-from torch_utils.ops import conv2d_gradfix
-from torch_utils.ops import grid_sample_gradfix
 from torch.utils.data.distributed import DistributedSampler
 
+import dnnlib
 import legacy
 from metrics import metric_main
+from torch_utils import misc, training_stats
+from torch_utils.ops import conv2d_gradfix, grid_sample_gradfix
 
 # ----------------------------------------------------------------------------
 
@@ -72,10 +71,9 @@ def setup_snapshot_image_grid(training_set, random_seed=0):
 
 
 def save_image_grid(img, fname, drange, grid_size):
+    """Save a grid of images into a single image file."""
     lo, hi = drange
     img = np.asarray(img, dtype=np.float32)
-    img = (img - lo) * (255 / (hi - lo))
-    img = np.rint(img).clip(0, 255).astype(np.uint8)
 
     gw, gh = grid_size
     _N, C, H, W = img.shape
@@ -83,15 +81,62 @@ def save_image_grid(img, fname, drange, grid_size):
     img = img.transpose(0, 3, 1, 4, 2)
     img = img.reshape([gh * H, gw * W, C])
 
-    if C == 5:
-        img = img[:, :, [2, 1, 0]]  # Select rgb channels
-        C = 3
+    img_f32 = img.copy()  # save a copy in float32 format for raw
+    img = (img_f32 - lo) * (255 / (hi - lo))
+    img = np.rint(img).clip(0, 255).astype(np.uint8)
 
-    assert C in [1, 3]
+    img_f32 = (img_f32 - lo) / (hi - lo)  # normalize to [0, 1] for raw
+    img_f32 = img_f32.clip(0, 1).astype(np.float32)
+
+    assert C in [1, 3, 5], f"Invalid value for C: {C}. Must be one of [1, 3, 5]."
     if C == 1:
         PIL.Image.fromarray(img[:, :, 0], "L").save(fname)
     if C == 3:
         PIL.Image.fromarray(img, "RGB").save(fname)
+    if C == 5:
+        PIL.Image.fromarray(img[:, :, [2, 1, 0]], "RGB").save(fname)  # Select rgb channels
+        # Save as raw image with all channels
+        save_raw_image(fname.replace(".png", ".raw"), img_f32)
+
+
+# ----------------------------------------------------------------------------
+
+
+def save_raw_image(filename: str, image: np.ndarray):
+    """
+    Save a multi-channel image to a .raw file in the format:
+    [num_channels, height, width] (uint32) + image data (uint32).
+
+    The image is scaled to the range [0, 65535] (uint16) based on its current range,
+    which can be [-1, 1], [0, 1], or [0, 255].
+
+    Args:
+        filename (str): path to the output .raw file
+        image (np.ndarray): array with shape (height, width, num_channels)
+    """
+    if image.ndim != 3:
+        raise ValueError("Image must have 3 dimensions: (height, width, num_channels)")
+
+    height, width, num_channels = image.shape
+    image = image.astype(np.float64)
+
+    # Normalize and scale to uint16 range [0, 65535]
+    if image.min() >= -1 and image.max() <= 1:
+        image = ((image + 1) / 2 * 65535).clip(0, 65535).astype(np.uint32)
+    elif image.min() >= 0 and image.max() <= 1:
+        image = (image * 65535).clip(0, 65535).astype(np.uint32)
+    elif image.min() >= 0 and image.max() <= 255:
+        image = ((image / 255.0) * 65535).clip(0, 65535).astype(np.uint32)
+    else:
+        raise ValueError("Image values must be in range [-1, 1], [0, 1], or [0, 255].")
+
+    # Header remains uint32
+    header = np.array([num_channels, height, width], dtype=np.uint32)
+
+    # Write file
+    with open(filename, "wb") as f:
+        header.tofile(f)
+        image.tofile(f)  # image is saved also as uint32
 
 
 # ----------------------------------------------------------------------------
@@ -188,9 +233,13 @@ def training_loop(
         c_dim=training_set.label_dim, img_resolution=training_set.resolution, img_channels=training_set.num_channels
     )
     # Add output_dim to epilogue_kwargs to perform classification
-    D_kwargs.epilogue_kwargs.output_dim = training_set.label_shape[0] if training_set.has_labels and loss_kwargs.class_weight > 0 else 0
+    D_kwargs.epilogue_kwargs.output_dim = (
+        training_set.label_shape[0] if training_set.has_labels and loss_kwargs.class_weight > 0 else 0
+    )
     # Pass label_map to loss class
-    loss_kwargs.label_map = training_set.get_label_map() if training_set.has_labels and training_set_kwargs.use_label_map else None
+    loss_kwargs.label_map = (
+        training_set.get_label_map() if training_set.has_labels and training_set_kwargs.use_label_map else None
+    )
 
     G = (
         dnnlib.util.construct_class_by_name(**G_kwargs, **common_kwargs).train().requires_grad_(False).to(device)
@@ -292,8 +341,9 @@ def training_loop(
     if rank == 0:
         stats_jsonl = open(os.path.join(run_dir, "stats.jsonl"), "wt")
         try:
-            import torch.utils.tensorboard as tensorboard
             import subprocess
+
+            import torch.utils.tensorboard as tensorboard
 
             stats_tfevents = tensorboard.SummaryWriter(run_dir)
             print(f"Launching TensorBoard in {run_dir}...")
@@ -341,8 +391,9 @@ def training_loop(
             else:
                 # Generate random class vectors following the training set distribution
                 all_gen_c = [
-                    training_set.get_label(np.random.randint(len(training_set))) for _ in range(len(phases) * batch_size)
-                ] 
+                    training_set.get_label(np.random.randint(len(training_set)))
+                    for _ in range(len(phases) * batch_size)
+                ]
 
             all_gen_c = torch.from_numpy(np.stack(all_gen_c)).pin_memory().to(device)
             all_gen_c = [phase_gen_c.split(batch_gpu) for phase_gen_c in all_gen_c.split(batch_size)]
