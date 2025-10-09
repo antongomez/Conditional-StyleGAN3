@@ -852,13 +852,14 @@ class DiscriminatorEpilogue(torch.nn.Module):
             in_channels + mbstd_num_channels, in_channels, kernel_size=3, activation=activation, conv_clamp=conv_clamp
         )
         self.fc = FullyConnectedLayer(in_channels * (resolution**2), in_channels, activation=activation)
+        # self.out = FullyConnectedLayer(in_channels * (resolution**2), 1 if cmap_dim == 0 else cmap_dim)
         self.out = FullyConnectedLayer(in_channels, 1 if cmap_dim == 0 else cmap_dim)
 
         self.classification_out = (
             FullyConnectedLayer(in_channels, output_dim, activation="linear", bias_init=0.0) if output_dim > 0 else None
         )
 
-    def forward(self, x, img, cmap, force_fp32=False):
+    def forward(self, x, img, cmap, force_fp32=False, return_latents=False):
         misc.assert_shape(x, [None, self.in_channels, self.resolution, self.resolution])  # [NCHW]
         _ = force_fp32  # unused
         dtype = torch.float32
@@ -877,6 +878,10 @@ class DiscriminatorEpilogue(torch.nn.Module):
         x = self.conv(x)
         x = self.fc(x.flatten(1))
         logits = self.out(x)
+        # logits = self.out((x.flatten(1)))
+
+        if return_latents:
+            return logits, None
 
         # Conditioning for real/fake classification.
         if self.cmap_dim > 0:
@@ -959,17 +964,21 @@ class Discriminator(torch.nn.Module):
             channels_dict[4], cmap_dim=cmap_dim, resolution=4, **epilogue_kwargs, **common_kwargs
         )
 
-    def forward(self, img, c, update_emas=False, **block_kwargs):
+    def forward(self, img, c, update_emas=False, return_features=False, return_latents=False, **block_kwargs):
         _ = update_emas  # unused
         x = None
         for res in self.block_resolutions:
             block = getattr(self, f"b{res}")
             x, img = block(x, img, **block_kwargs)
 
+        if return_features:
+            return x, None
+
         cmap = None
-        if self.c_dim > 0:
+        if self.c_dim > 0 and not return_latents: # avoid unnecessary mapping when latents are requested
             cmap = self.mapping(None, c)
-        conditioned_logits, classification_logits = self.b4(x, img, cmap)
+
+        conditioned_logits, classification_logits = self.b4(x, img, cmap, return_latents=return_latents)
 
         return conditioned_logits, classification_logits
 
