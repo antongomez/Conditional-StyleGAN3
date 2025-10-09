@@ -10,9 +10,9 @@
 
 import numpy as np
 import torch
+
 from torch_utils import training_stats
-from torch_utils.ops import conv2d_gradfix
-from torch_utils.ops import upfirdn2d
+from torch_utils.ops import conv2d_gradfix, upfirdn2d
 
 # ----------------------------------------------------------------------------
 
@@ -128,6 +128,7 @@ class StyleGAN2Loss(Loss):
         blur_fade_kimg=0,
         class_weight=0,
         label_map=None,
+        autoencoder_kimg=0,
     ):
         super().__init__()
         self.device = device
@@ -145,6 +146,7 @@ class StyleGAN2Loss(Loss):
         self.blur_fade_kimg = blur_fade_kimg
         self.class_weight = class_weight
         self.label_map = label_map
+        self.autoencoder_kimg = autoencoder_kimg
 
     def run_G(self, z, c, update_emas=False):
         ws = self.G.mapping(z, c, update_emas=update_emas)
@@ -160,26 +162,52 @@ class StyleGAN2Loss(Loss):
         img = self.G.synthesis(ws, update_emas=update_emas)
         return img, ws
 
-    def run_D(self, img, c, blur_sigma=0, update_emas=False):
-        blur_size = np.floor(blur_sigma * 3)
-        if blur_size > 0:
-            with torch.autograd.profiler.record_function("blur"):
-                f = torch.arange(-blur_size, blur_size + 1, device=img.device).div(blur_sigma).square().neg().exp2()
-                img = upfirdn2d.filter2d(img, f / f.sum())
+    def run_D(self, img, c, blur_sigma=0, update_emas=False, return_latents=False):
+        if not return_latents:
+            blur_size = np.floor(blur_sigma * 3)
+            if blur_size > 0:
+                with torch.autograd.profiler.record_function("blur"):
+                    f = torch.arange(-blur_size, blur_size + 1, device=img.device).div(blur_sigma).square().neg().exp2()
+                    img = upfirdn2d.filter2d(img, f / f.sum())
         if self.augment_pipe is not None:
             img = self.augment_pipe(img)
-        conditioned_logits, classification_logits = self.D(img, c, update_emas=update_emas)
+        conditioned_logits, classification_logits = self.D(
+            img, c, update_emas=update_emas, return_latents=return_latents
+        )
         return conditioned_logits, classification_logits
+    
+    def get_features(self, img, c):
+        with torch.no_grad():
+            features, _ = self.D(img, c, return_features=True)
+        return features
 
     def accumulate_gradients(self, phase, real_img, real_c, gen_z, gen_c, gain, cur_nimg, disc_on_gen=False):
-        assert phase in ["Gmain", "Greg", "Gboth", "Dmain", "Dreg", "Dboth"]
+        assert phase in ["Gmain", "Greg", "Gboth", "Dmain", "Dreg", "Dboth", "AE"]
         if self.pl_weight == 0:
             phase = {"Greg": "none", "Gboth": "Gmain"}.get(phase, phase)
         if self.r1_gamma == 0:
             phase = {"Dreg": "none", "Dboth": "Dmain"}.get(phase, phase)
+
+        # If training the autoencoder, update cur_nimg to avoid counting iterations when training the autoencoder
+        assert (
+            cur_nimg <= self.autoencoder_kimg and phase == "AE" or cur_nimg >= self.autoencoder_kimg
+        ), "cur_nimg must be less than or equal to autoencoder_kimg when training the autoencoder, and greater otherwise."
+        cur_nimg = cur_nimg - self.autoencoder_kimg if cur_nimg > self.autoencoder_kimg else cur_nimg
+
         blur_sigma = (
             max(1 - cur_nimg / (self.blur_fade_kimg * 1e3), 0) * self.blur_init_sigma if self.blur_fade_kimg > 0 else 0
         )
+
+        if phase == "AE":
+            with torch.autograd.profiler.record_function("AE_forward"):
+                logits, _ = self.run_D(real_img, real_c, blur_sigma=blur_sigma, return_latents=True)
+                gen_img, _gen_ws = self.run_G(logits, real_c)
+
+                loss_AE = torch.nn.functional.l1_loss(gen_img, real_img)
+                training_stats.report("Loss/AE/loss", loss_AE)
+            with torch.autograd.profiler.record_function("AE_backward"):
+                loss_AE.mean().mul(gain).backward()
+            return
 
         # Gmain: Maximize logits for generated images.
         if phase in ["Gmain", "Gboth"]:
@@ -230,7 +258,9 @@ class StyleGAN2Loss(Loss):
                     results_per_class = compute_class_prediction_accuracy(gen_logits, gen_c, label_map=self.label_map)
                     for cls, classification_tensor in results_per_class.items():
                         training_stats.report(f"Accuracy/fake/{cls}", classification_tensor)
-                    confusion_matrix_dict = compute_confusion_matrix_dict(gen_logits, gen_c, type="fake", label_map=self.label_map)
+                    confusion_matrix_dict = compute_confusion_matrix_dict(
+                        gen_logits, gen_c, type="fake", label_map=self.label_map
+                    )
                     for key, confusion_tensor in confusion_matrix_dict.items():
                         training_stats.report(key, confusion_tensor)
 
@@ -264,7 +294,9 @@ class StyleGAN2Loss(Loss):
                     results_per_class = compute_class_prediction_accuracy(real_logits, real_c, label_map=self.label_map)
                     for cls, classification_tensor in results_per_class.items():
                         training_stats.report(f"Accuracy/real/{cls}", classification_tensor)
-                    confusion_matrix_dict = compute_confusion_matrix_dict(real_logits, real_c, type="real", label_map=self.label_map)
+                    confusion_matrix_dict = compute_confusion_matrix_dict(
+                        real_logits, real_c, type="real", label_map=self.label_map
+                    )
                     for key, confusion_tensor in confusion_matrix_dict.items():
                         training_stats.report(key, confusion_tensor)
 
@@ -318,22 +350,60 @@ class StyleGAN2Loss(Loss):
 
             if batch_size is not None and real_img.shape[0] < batch_size:
                 # Remove the padded elements
-                real_logits = real_logits[: actual_batch_size]
-                real_c = real_c[: actual_batch_size]
+                real_logits = real_logits[:actual_batch_size]
+                real_c = real_c[:actual_batch_size]
 
-            # Compute classification results per class and report
-            results_per_class = compute_class_prediction_accuracy(real_logits, real_c, label_map=self.label_map)
-            for cls, classification_tensor in results_per_class.items():
-                training_stats.report(f"Accuracy/val/{cls}", classification_tensor)
-            confusion_matrix_dict = compute_confusion_matrix_dict(real_logits, real_c, type="val", label_map=self.label_map)
-            for key, confusion_tensor in confusion_matrix_dict.items():
-                training_stats.report(key, confusion_tensor)
+                # Compute classification results per class and report
+                results_per_class = compute_class_prediction_accuracy(real_logits, real_c, label_map=self.label_map)
+                for cls, classification_tensor in results_per_class.items():
+                    training_stats.report(f"Accuracy/val/{cls}", classification_tensor)
+                confusion_matrix_dict = compute_confusion_matrix_dict(
+                    real_logits, real_c, type="val", label_map=self.label_map
+                )
+                for key, confusion_tensor in confusion_matrix_dict.items():
+                    training_stats.report(key, confusion_tensor)
 
-            # Compute loss and report
-            loss_cls_real = torch.nn.functional.cross_entropy(real_logits, real_c.argmax(dim=1))
-            training_stats.report("Loss/D/classification/real/val", loss_cls_real)
+                # Compute loss and report
+                loss_cls_real = torch.nn.functional.cross_entropy(real_logits, real_c.argmax(dim=1))
+                training_stats.report("Loss/D/classification/real/val", loss_cls_real)
 
         self.D.train().requires_grad_(False)  # in main loop, we will set requires_grad to True for the discriminator
+
+    
+    def evaluate_autoencoder(self, real_img, real_c, batch_size=None):
+        if batch_size is not None:
+            assert real_img.shape[0] <= batch_size, "Batch size must be equal or larger than the number of images."
+            assert real_c.shape[0] <= batch_size, "Batch size must be equal or larger than the number of images."
+
+        actual_batch_size = real_img.shape[0]
+        if batch_size is not None and actual_batch_size < batch_size:
+            # If the last batch is smaller than batch_size, we need to pad it
+            pad_size = batch_size - actual_batch_size
+
+            pad_images = torch.zeros((pad_size, *real_img.shape[1:]), dtype=real_img.dtype, device=real_img.device)
+            real_img_padded = torch.cat([real_img, pad_images], dim=0)
+
+            pad_c = torch.zeros((pad_size, *real_c.shape[1:]), dtype=real_c.dtype, device=real_c.device)
+            real_c_padded = torch.cat([real_c, pad_c], dim=0)
+        else:
+            real_img_padded = real_img
+            real_c_padded = real_c
+
+        self.D.eval()
+        self.G.eval()
+        with torch.no_grad():
+            logits, _ = self.run_D(real_img_padded, real_c_padded, return_latents=True)
+            gen_img, _gen_ws = self.run_G(logits, real_c_padded)
+
+            if batch_size is not None and actual_batch_size < batch_size:
+                # Remove the padded elements
+                gen_img = gen_img[:actual_batch_size]
+
+            loss_AE = torch.nn.functional.l1_loss(gen_img, real_img)
+            training_stats.report("Loss/AE/val/loss", loss_AE)
+
+        self.D.train().requires_grad_(False)  # in main loop, we will set requires_grad to True for the discriminator
+        self.G.train().requires_grad_(False)  # in main loop, we will set requires_grad to True for the generator
 
 
 # ----------------------------------------------------------------------------
