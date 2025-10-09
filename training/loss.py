@@ -175,7 +175,7 @@ class StyleGAN2Loss(Loss):
             img, c, update_emas=update_emas, return_latents=return_latents
         )
         return conditioned_logits, classification_logits
-    
+
     def get_features(self, img, c):
         with torch.no_grad():
             features, _ = self.D(img, c, return_features=True)
@@ -348,8 +348,8 @@ class StyleGAN2Loss(Loss):
         with torch.no_grad():
             _, real_logits = self.D(real_img, real_c)
 
+            # Remove the padded elements
             if batch_size is not None and real_img.shape[0] < batch_size:
-                # Remove the padded elements
                 real_logits = real_logits[:actual_batch_size]
                 real_c = real_c[:actual_batch_size]
 
@@ -363,13 +363,12 @@ class StyleGAN2Loss(Loss):
             for key, confusion_tensor in confusion_matrix_dict.items():
                 training_stats.report(key, confusion_tensor)
 
-            # Compute loss and report
-            loss_cls_real = torch.nn.functional.cross_entropy(real_logits, real_c.argmax(dim=1))
-            training_stats.report("Loss/D/classification/real/val", loss_cls_real)
+                # Compute loss and report
+                loss_cls_real = torch.nn.functional.cross_entropy(real_logits, real_c.argmax(dim=1))
+                training_stats.report("Loss/D/classification/real/val", loss_cls_real)
 
         self.D.train().requires_grad_(False)  # in main loop, we will set requires_grad to True for the discriminator
 
-    
     def evaluate_autoencoder(self, real_img, real_c, batch_size=None):
         if batch_size is not None:
             assert real_img.shape[0] <= batch_size, "Batch size must be equal or larger than the number of images."
