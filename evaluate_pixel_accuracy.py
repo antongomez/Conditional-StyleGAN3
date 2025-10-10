@@ -7,6 +7,7 @@ import glob
 import json
 import os
 import time
+import re
 import warnings
 from datetime import datetime
 from pathlib import Path
@@ -254,7 +255,7 @@ def main():
         choices=["json", "pickle", "npz"],
         help="Format for saving split information (default: json)",
     )
-    parser.add_argument("--batch-size", type=int, default=512, help="Batch size for evaluation (default: 512)")
+    parser.add_argument("--batch-size", type=int, default=64, help="Batch size for evaluation (default: 64)")
     parser.add_argument(
         "--remove",
         action="store_true",
@@ -307,18 +308,34 @@ def main():
         )
 
         if args.remove:
-            print("Removing other .pkl files...")
+            print(">>> Removing other .pkl files (keeping only the selected one and the last one)...")
             deleted_count = 0
             freed_bytes = 0
 
-            for pkl_file in glob.glob(os.path.join(args.experiment_dir, "*.pkl")):
-                if os.path.abspath(pkl_file) != os.path.abspath(args.network_pkl):
+            # List all .pkl files in the experiment directory
+            pkl_files = glob.glob(os.path.join(args.experiment_dir, "*.pkl"))
+
+            # Find the last snapshot (highest number in filename)
+            last_snapshot = None
+            max_num = -1
+            for pkl_file in pkl_files:
+                match = re.search(r'-(\d+)\.pkl$', pkl_file)
+                if match:
+                    num = int(match.group(1))
+                    if num > max_num:
+                        max_num = num
+                        last_snapshot = pkl_file
+
+            # Delete files that are not the selected one or the last snapshot
+            for pkl_file in pkl_files:
+                if os.path.abspath(pkl_file) not in (os.path.abspath(args.network_pkl), os.path.abspath(last_snapshot)):
                     file_size = os.path.getsize(pkl_file)
                     os.remove(pkl_file)
                     deleted_count += 1
                     freed_bytes += file_size
+
             print(
-                f"Cleanup complete. Deleted {deleted_count} files, freeing {freed_bytes / (1024 * 1024 * 1024):.2f} GB."
+                f">>> Cleanup complete. Deleted {deleted_count} files, freeing {freed_bytes / (1024 * 1024 * 1024):.2f} GB."
             )
 
     print("Loading discriminator...")
