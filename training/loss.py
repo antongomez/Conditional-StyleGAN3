@@ -353,19 +353,19 @@ class StyleGAN2Loss(Loss):
                 real_logits = real_logits[:actual_batch_size]
                 real_c = real_c[:actual_batch_size]
 
-                # Compute classification results per class and report
-                results_per_class = compute_class_prediction_accuracy(real_logits, real_c, label_map=self.label_map)
-                for cls, classification_tensor in results_per_class.items():
-                    training_stats.report(f"Accuracy/val/{cls}", classification_tensor)
-                confusion_matrix_dict = compute_confusion_matrix_dict(
-                    real_logits, real_c, type="val", label_map=self.label_map
-                )
-                for key, confusion_tensor in confusion_matrix_dict.items():
-                    training_stats.report(key, confusion_tensor)
+            # Compute classification results per class and report
+            results_per_class = compute_class_prediction_accuracy(real_logits, real_c, label_map=self.label_map)
+            for cls, classification_tensor in results_per_class.items():
+                training_stats.report(f"Accuracy/val/{cls}", classification_tensor)
+            confusion_matrix_dict = compute_confusion_matrix_dict(
+                real_logits, real_c, type="val", label_map=self.label_map
+            )
+            for key, confusion_tensor in confusion_matrix_dict.items():
+                training_stats.report(key, confusion_tensor)
 
-                # Compute loss and report
-                loss_cls_real = torch.nn.functional.cross_entropy(real_logits, real_c.argmax(dim=1))
-                training_stats.report("Loss/D/classification/real/val", loss_cls_real)
+            # Compute loss and report
+            loss_cls_real = torch.nn.functional.cross_entropy(real_logits, real_c.argmax(dim=1))
+            training_stats.report("Loss/D/classification/real/val", loss_cls_real)
 
         self.D.train().requires_grad_(False)  # in main loop, we will set requires_grad to True for the discriminator
 
