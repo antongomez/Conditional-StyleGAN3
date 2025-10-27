@@ -150,6 +150,9 @@ def parse_comma_separated_list(s):
 @click.option('--disc-on-gen',  help='Run discriminator on generated images', metavar='BOOL',   type=bool, default=False, show_default=True)
 @click.option('--use-label-map',help='Use label map for non-consecutive integer labels', metavar='BOOL', type=bool, default=False, show_default=True)
 
+# Memory save arguments
+@click.option('--save-all-snaps',help='Save all snapshots during training', metavar='BOOL', type=bool, default=False, show_default=True)
+
 # Misc hyperparameters.
 @click.option('--p',            help='Probability for --aug=fixed', metavar='FLOAT',            type=click.FloatRange(min=0, max=1), default=0.2, show_default=True)
 @click.option('--target',       help='Target value for --aug=ada', metavar='FLOAT',             type=click.FloatRange(min=0, max=1), default=0.6, show_default=True)
@@ -241,6 +244,9 @@ def main(**kwargs):
     c.loss_kwargs.class_weight = opts.cls_weight
     c.uniform_class_labels = opts.uniform_class 
     c.disc_on_gen = opts.disc_on_gen
+
+    # Memory save option
+    c.save_all_snaps = opts.save_all_snaps
 
     # Sanity checks.
     if c.batch_size % c.num_gpus != 0:

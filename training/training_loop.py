@@ -25,6 +25,7 @@ import legacy
 from metrics import metric_main
 from torch_utils import misc, training_stats
 from torch_utils.ops import conv2d_gradfix, grid_sample_gradfix
+from visualization_utils import compute_avg_accuracy
 
 # ----------------------------------------------------------------------------
 
@@ -178,6 +179,7 @@ def training_loop(
     progress_fn=None,  # Callback function for updating training progress. Called for all ranks.
     uniform_class_labels=False,  # Use uniform class labels for generated images or use the training set distribution?
     disc_on_gen=False,  # Whether to run the discriminator on generated images.
+    save_all_snaps=True,  # Whether to save all snapshots or only the best one based on validation average accuracy.
 ):
     # Initialize.
     start_time = time.time()
@@ -189,6 +191,11 @@ def training_loop(
     torch.backends.cudnn.allow_tf32 = False  # Improves numerical accuracy.
     conv2d_gradfix.enabled = True  # Improves training speed.
     grid_sample_gradfix.enabled = True  # Avoids errors with the augmentation pipe.
+
+    # Initialize the best validation average accuracy
+    best_val_avg_acc = 0.0
+    best_val_avg_acc_tick = 0
+    best_snapshot_pkl_path = None
 
     # Load training set.
     if rank == 0:
@@ -340,22 +347,25 @@ def training_loop(
     stats_tfevents = None
     if rank == 0:
         stats_jsonl = open(os.path.join(run_dir, "stats.jsonl"), "wt")
-        try:
-            import subprocess
-
-            import torch.utils.tensorboard as tensorboard
-
-            stats_tfevents = tensorboard.SummaryWriter(run_dir)
-            print(f"Launching TensorBoard in {run_dir}...")
-            command = ["tensorboard", "--logdir=" + run_dir, "--port=8888"]
+        process = None
+        use_tensorboard = False
+        if use_tensorboard:
             try:
-                # Popen runs the command in the background
-                process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-                print(f"TensorBoard started in the background with PID {process.pid}.")
-            except Exception as e:
-                print(f"Could not start TensorBoard: {e}")
-        except ImportError as err:
-            print("Skipping tfevents export:", err)
+                import subprocess
+
+                import torch.utils.tensorboard as tensorboard
+
+                stats_tfevents = tensorboard.SummaryWriter(run_dir)
+                print(f"Launching TensorBoard in {run_dir}...")
+                command = ["tensorboard", "--logdir=" + run_dir, "--port=8888"]
+                try:
+                    # Popen runs the command in the background
+                    process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                    print(f"TensorBoard started in the background with PID {process.pid}.")
+                except Exception as e:
+                    print(f"Could not start TensorBoard: {e}")
+            except ImportError as err:
+                print("Skipping tfevents export:", err)
 
     # Train.
     if rank == 0:
@@ -505,34 +515,6 @@ def training_loop(
                 print()
                 print("Aborting...")
 
-        # Save image snapshot.
-        if (rank == 0) and (image_snapshot_ticks is not None) and (done or cur_tick % image_snapshot_ticks == 0):
-            images = torch.cat([G_ema(z=z, c=c, noise_mode="const").cpu() for z, c in zip(grid_z, grid_c)]).numpy()
-            save_image_grid(
-                images, os.path.join(run_dir, f"fakes{cur_nimg//1000:06d}.png"), drange=[-1, 1], grid_size=grid_size
-            )
-
-        # Save network snapshot.
-        snapshot_pkl = None
-        snapshot_data = None
-        if (network_snapshot_ticks is not None) and (done or cur_tick % network_snapshot_ticks == 0):
-            snapshot_data = dict(
-                G=G, D=D, G_ema=G_ema, augment_pipe=augment_pipe, training_set_kwargs=dict(training_set_kwargs)
-            )
-            for key, value in snapshot_data.items():
-                if isinstance(value, torch.nn.Module):
-                    value = copy.deepcopy(value).eval().requires_grad_(False)
-                    if num_gpus > 1:
-                        misc.check_ddp_consistency(value, ignore_regex=r".*\.[^.]+_(avg|ema)")
-                        for param in misc.params_and_buffers(value):
-                            torch.distributed.broadcast(param, src=0)
-                    snapshot_data[key] = value.cpu()
-                del value  # conserve memory
-            snapshot_pkl = os.path.join(run_dir, f"network-snapshot-{cur_nimg//1000:06d}.pkl")
-            if rank == 0:
-                with open(snapshot_pkl, "wb") as f:
-                    pickle.dump(snapshot_data, f)
-
         # Evaluate validation set.
         if loss_kwargs.class_weight > 0:
             if rank == 0:
@@ -546,6 +528,73 @@ def training_loop(
                         loss.evaluate_discriminator(real_img=real_img, real_c=real_c, batch_size=batch_gpu)
             if rank == 0:
                 print("Finished!")
+
+        # Collect statistics.
+        for phase in phases:
+            value = []
+            if (phase.start_event is not None) and (phase.end_event is not None):
+                phase.end_event.synchronize()
+                value = phase.start_event.elapsed_time(phase.end_event)
+            training_stats.report0("Timing/" + phase.name, value)
+        stats_collector.update()
+        stats_dict = stats_collector.as_dict()
+
+        # Update best validation average accuracy
+        if loss_kwargs.class_weight > 0 and (done or cur_tick % image_snapshot_ticks == 0) and rank == 0:
+            val_stats = {key: [val.mean] for key, val in stats_dict.items() if key.startswith("Accuracy/")}
+            class_labels = [k.split("/")[-1] for k in val_stats.keys()]
+            _, _, _, _, val_avg_acc, _ = compute_avg_accuracy(val_stats, clean_nan=True, class_labels=class_labels)
+            if val_avg_acc.size > 0:
+                val_avg_acc = val_avg_acc[0]
+                if val_avg_acc > best_val_avg_acc:
+                    best_val_avg_acc = val_avg_acc
+                    best_val_avg_acc_tick = cur_nimg // 1000
+
+        # Save image snapshot.
+        if (rank == 0) and (image_snapshot_ticks is not None) and (done or cur_tick % image_snapshot_ticks == 0):
+            images = torch.cat([G_ema(z=z, c=c, noise_mode="const").cpu() for z, c in zip(grid_z, grid_c)]).numpy()
+            save_image_grid(
+                images, os.path.join(run_dir, f"fakes{cur_nimg//1000:06d}.png"), drange=[-1, 1], grid_size=grid_size
+            )
+
+        # Save network snapshot.
+        snapshot_pkl = None
+        snapshot_data = None
+
+        # This line works as expected as long as
+        is_best_so_far = cur_nimg // 1000 == best_val_avg_acc_tick  # Always true at the beginning
+
+        if (
+            network_snapshot_ticks is not None
+            and (cur_tick % network_snapshot_ticks == 0 or done)
+            and (save_all_snaps or is_best_so_far or done)
+        ):
+            snapshot_data = dict(
+                G=G, D=D, G_ema=G_ema, augment_pipe=augment_pipe, training_set_kwargs=dict(training_set_kwargs)
+            )
+            for key, value in snapshot_data.items():
+                if isinstance(value, torch.nn.Module):
+                    value = copy.deepcopy(value).eval().requires_grad_(False)
+                    if num_gpus > 1:
+                        misc.check_ddp_consistency(value, ignore_regex=r".*\.[^.]+_(avg|ema)")
+                        for param in misc.params_and_buffers(value):
+                            torch.distributed.broadcast(param, src=0)
+                    snapshot_data[key] = value.cpu()
+                del value  # conserve memory
+
+            # Remove previous best snapshot if needed
+            snapshot_pkl = os.path.join(run_dir, f"network-snapshot-{cur_nimg//1000:06d}.pkl")
+            if rank == 0:
+                if is_best_so_far:
+                    if best_snapshot_pkl_path is not None:
+                        try:
+                            os.remove(best_snapshot_pkl_path)
+                        except OSError:
+                            pass
+                    best_snapshot_pkl_path = snapshot_pkl
+
+                with open(snapshot_pkl, "wb") as f:
+                    pickle.dump(snapshot_data, f)
 
         # Evaluate metrics.
         if (snapshot_data is not None) and (len(metrics) > 0):
@@ -563,17 +612,10 @@ def training_loop(
                 if rank == 0:
                     metric_main.report_metric(result_dict, run_dir=run_dir, snapshot_pkl=snapshot_pkl)
                 stats_metrics.update(result_dict.results)
-        del snapshot_data  # conserve memory
+            if rank == 0:
+                print("Finished!")
 
-        # Collect statistics.
-        for phase in phases:
-            value = []
-            if (phase.start_event is not None) and (phase.end_event is not None):
-                phase.end_event.synchronize()
-                value = phase.start_event.elapsed_time(phase.end_event)
-            training_stats.report0("Timing/" + phase.name, value)
-        stats_collector.update()
-        stats_dict = stats_collector.as_dict()
+        del snapshot_data  # conserve memory
 
         # Update logs.
         timestamp = time.time()
