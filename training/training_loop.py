@@ -540,7 +540,7 @@ def training_loop(
         stats_dict = stats_collector.as_dict()
 
         # Update best validation average accuracy
-        if loss_kwargs.class_weight > 0 and (done or cur_tick % image_snapshot_ticks == 0) and rank == 0:
+        if loss_kwargs.class_weight > 0 and (done or cur_tick % image_snapshot_ticks == 0):
             val_stats = {key: [val.mean] for key, val in stats_dict.items() if key.startswith("Accuracy/")}
             class_labels = [k.split("/")[-1] for k in val_stats.keys()]
             _, _, _, _, val_avg_acc, _ = compute_avg_accuracy(val_stats, clean_nan=True, class_labels=class_labels)
