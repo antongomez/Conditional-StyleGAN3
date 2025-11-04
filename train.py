@@ -165,6 +165,7 @@ def parse_comma_separated_list(s):
 @click.option('--disc-on-gen',  help='Run discriminator on generated images', metavar='BOOL',   type=bool, default=False, show_default=True)
 @click.option('--use-label-map',help='Use label map for non-consecutive integer labels', metavar='BOOL', type=bool, default=False, show_default=True)
 @click.option('--autoen-kimg',  help='Autoencoder pretraining duration', metavar='KIMG',        type=click.IntRange(min=0), default=0, show_default=True)
+
 # Memory save arguments
 @click.option('--save-all-snaps',help='Save all snapshots during training', metavar='BOOL', type=bool, default=False, show_default=True)
 
@@ -262,6 +263,7 @@ def main(**kwargs):
     c.loss_kwargs.class_weight = opts.cls_weight
     c.uniform_class_labels = opts.uniform_class 
     c.disc_on_gen = opts.disc_on_gen
+    c.autoencoder_kimg = opts.autoen_kimg
 
     # Memory save option
     c.save_all_snaps = opts.save_all_snaps

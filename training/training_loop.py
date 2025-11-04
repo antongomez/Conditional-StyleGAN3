@@ -180,6 +180,7 @@ def training_loop(
     uniform_class_labels=False,  # Use uniform class labels for generated images or use the training set distribution?
     disc_on_gen=False,  # Whether to run the discriminator on generated images.
     save_all_snaps=True,  # Whether to save all snapshots or only the best one based on validation average accuracy.
+    autoencoder_kimg=0,  # Number of kimg to train the autoencoder for at the beginning of training.
 ):
     # Initialize.
     start_time = time.time()
@@ -299,6 +300,10 @@ def training_loop(
         device=device, G=G, D=D, augment_pipe=augment_pipe, **loss_kwargs
     )  # subclass of training.loss.Loss
     phases = []
+    if autoencoder_kimg > 0:
+        G_opt = dnnlib.util.construct_class_by_name(params=G.parameters(), **G_opt_kwargs)
+        D_opt = dnnlib.util.construct_class_by_name(params=D.parameters(), **D_opt_kwargs)
+        phases += [dnnlib.EasyDict(name="AE", modules=[G, D], opts=[G_opt, D_opt], interval=1)]
     for name, module, opt_kwargs, reg_interval in [
         ("G", G, G_opt_kwargs, G_reg_interval),
         ("D", D, D_opt_kwargs, D_reg_interval),
@@ -307,7 +312,7 @@ def training_loop(
             opt = dnnlib.util.construct_class_by_name(
                 params=module.parameters(), **opt_kwargs
             )  # subclass of torch.optim.Optimizer
-            phases += [dnnlib.EasyDict(name=name + "both", module=module, opt=opt, interval=1)]
+            phases += [dnnlib.EasyDict(name=name + "both", modules=[module], opts=[opt], interval=1)]
         else:  # Lazy regularization.
             mb_ratio = reg_interval / (reg_interval + 1)
             opt_kwargs = dnnlib.EasyDict(opt_kwargs)
@@ -316,14 +321,16 @@ def training_loop(
             opt = dnnlib.util.construct_class_by_name(
                 module.parameters(), **opt_kwargs
             )  # subclass of torch.optim.Optimizer
-            phases += [dnnlib.EasyDict(name=name + "main", module=module, opt=opt, interval=1)]
-            phases += [dnnlib.EasyDict(name=name + "reg", module=module, opt=opt, interval=reg_interval)]
+            phases += [dnnlib.EasyDict(name=name + "main", modules=[module], opts=[opt], interval=1)]
+            phases += [dnnlib.EasyDict(name=name + "reg", modules=[module], opts=[opt], interval=reg_interval)]
     for phase in phases:
         phase.start_event = None
         phase.end_event = None
         if rank == 0:
             phase.start_event = torch.cuda.Event(enable_timing=True)
             phase.end_event = torch.cuda.Event(enable_timing=True)
+
+    print(f"Phases: {[phase.name for phase in phases]}")
 
     # Export sample images.
     grid_size = None
@@ -372,6 +379,7 @@ def training_loop(
         print(f"Training for {total_kimg} kimg...")
         print()
     cur_nimg = resume_kimg * 1000
+    autoencoder_nimg = 0
     cur_tick = 0
     tick_start_nimg = cur_nimg
     tick_start_time = time.time()
@@ -380,6 +388,8 @@ def training_loop(
     if progress_fn is not None:
         progress_fn(0, total_kimg)
     while True:
+
+        # This consumes time during autoencoder training that can be avoided (we do not need them)
 
         # Fetch training data.
         with torch.autograd.profiler.record_function("data_fetch"):
@@ -410,40 +420,48 @@ def training_loop(
 
         # Execute training phases.
         for phase, phase_gen_z, phase_gen_c in zip(phases, all_gen_z, all_gen_c):
+            if phase.name != "AE" and autoencoder_nimg < autoencoder_kimg * 1000:
+                continue
+            if phase.name == "AE" and autoencoder_nimg >= autoencoder_kimg * 1000:
+                continue
             if batch_idx % phase.interval != 0:
                 continue
             if phase.start_event is not None:
                 phase.start_event.record(torch.cuda.current_stream(device))
 
-            # Accumulate gradients.
-            phase.opt.zero_grad(set_to_none=True)
-            phase.module.requires_grad_(True)
-            for real_img, real_c, gen_z, gen_c in zip(phase_real_img, phase_real_c, phase_gen_z, phase_gen_c):
-                loss.accumulate_gradients(
-                    phase=phase.name,
-                    real_img=real_img,
-                    real_c=real_c,
-                    gen_z=gen_z,
-                    gen_c=gen_c,
-                    gain=phase.interval,
-                    cur_nimg=cur_nimg,
-                    disc_on_gen=disc_on_gen,
-                )
-            phase.module.requires_grad_(False)
+            # # Accumulate gradients.
+            # for module, opt in zip(phase.modules, phase.opts):
+            #     opt.zero_grad(set_to_none=True)
+            #     module.requires_grad_(True)
+            # for real_img, real_c, gen_z, gen_c in zip(phase_real_img, phase_real_c, phase_gen_z, phase_gen_c):
+            #     loss.accumulate_gradients(
+            #         phase=phase.name,
+            #         real_img=real_img,
+            #         real_c=real_c,
+            #         gen_z=gen_z,
+            #         gen_c=gen_c,
+            #         gain=phase.interval,
+            #         cur_nimg=cur_nimg,
+            #         autoencoder_nimg=autoencoder_nimg,
+            #         disc_on_gen=disc_on_gen,
+            #     )
+            # for module in phase.modules:
+            #     module.requires_grad_(False)
 
-            # Update weights.
-            with torch.autograd.profiler.record_function(phase.name + "_opt"):
-                params = [param for param in phase.module.parameters() if param.grad is not None]
-                if len(params) > 0:
-                    flat = torch.cat([param.grad.flatten() for param in params])
-                    if num_gpus > 1:
-                        torch.distributed.all_reduce(flat)
-                        flat /= num_gpus
-                    misc.nan_to_num(flat, nan=0, posinf=1e5, neginf=-1e5, out=flat)
-                    grads = flat.split([param.numel() for param in params])
-                    for param, grad in zip(params, grads):
-                        param.grad = grad.reshape(param.shape)
-                phase.opt.step()
+            # # Update weights.
+            # with torch.autograd.profiler.record_function(phase.name + "_opt"):
+            #     for module, opt in zip(phase.modules, phase.opts):
+            #         params = [param for param in module.parameters() if param.grad is not None]
+            #         if len(params) > 0:
+            #             flat = torch.cat([param.grad.flatten() for param in params])
+            #             if num_gpus > 1:
+            #                 torch.distributed.all_reduce(flat)
+            #                 flat /= num_gpus
+            #             misc.nan_to_num(flat, nan=0, posinf=1e5, neginf=-1e5, out=flat)
+            #             grads = flat.split([param.numel() for param in params])
+            #             for param, grad in zip(params, grads):
+            #                 param.grad = grad.reshape(param.shape)
+            #         opt.step()
 
             # Phase done.
             if phase.end_event is not None:
@@ -461,6 +479,8 @@ def training_loop(
                 b_ema.copy_(b)
 
         # Update state.
+        if autoencoder_nimg < autoencoder_kimg * 1000:
+            autoencoder_nimg += batch_size
         cur_nimg += batch_size
         batch_idx += 1
 
@@ -515,7 +535,14 @@ def training_loop(
                 print()
                 print("Aborting...")
 
-        # Evaluate validation set.
+        # Save image snapshot.
+        if (rank == 0) and (image_snapshot_ticks is not None) and (done or cur_tick % image_snapshot_ticks == 0):
+            images = torch.cat([G_ema(z=z, c=c, noise_mode="const").cpu() for z, c in zip(grid_z, grid_c)]).numpy()
+            save_image_grid(
+                images, os.path.join(run_dir, f"fakes{cur_nimg//1000:06d}.png"), drange=[-1, 1], grid_size=grid_size
+            )
+
+        # Evaluate validation set
         if loss_kwargs.class_weight > 0:
             if rank == 0:
                 print("Evaluating validation set...", end=" ")
@@ -526,15 +553,19 @@ def training_loop(
 
                     for real_img, real_c in zip(val_real_img, val_real_c):
                         loss.evaluate_discriminator(real_img=real_img, real_c=real_c, batch_size=batch_gpu)
+                        loss.evaluate_autoencoder(real_img=real_img, real_c=real_c, batch_size=batch_gpu)
             if rank == 0:
                 print("Finished!")
 
         # Collect statistics.
         for phase in phases:
             value = []
-            if (phase.start_event is not None) and (phase.end_event is not None):
+            if phase.start_event is not None and phase.end_event is not None:
                 phase.end_event.synchronize()
-                value = phase.start_event.elapsed_time(phase.end_event)
+                try:
+                    value = phase.start_event.elapsed_time(phase.end_event)
+                except RuntimeError as e:
+                    value = float("nan")
             training_stats.report0("Timing/" + phase.name, value)
         stats_collector.update()
         stats_dict = stats_collector.as_dict()
@@ -550,18 +581,11 @@ def training_loop(
                     best_val_avg_acc = val_avg_acc
                     best_val_avg_acc_tick = cur_nimg // 1000
 
-        # Save image snapshot.
-        if (rank == 0) and (image_snapshot_ticks is not None) and (done or cur_tick % image_snapshot_ticks == 0):
-            images = torch.cat([G_ema(z=z, c=c, noise_mode="const").cpu() for z, c in zip(grid_z, grid_c)]).numpy()
-            save_image_grid(
-                images, os.path.join(run_dir, f"fakes{cur_nimg//1000:06d}.png"), drange=[-1, 1], grid_size=grid_size
-            )
-
         # Save network snapshot.
         snapshot_pkl = None
         snapshot_data = None
 
-        # This line works as expected as long as
+        # This line works as expected as long as tick interval is at least 1 kimg
         is_best_so_far = cur_nimg // 1000 == best_val_avg_acc_tick  # Always true at the beginning
 
         if (
