@@ -163,13 +163,12 @@ class StyleGAN2Loss(Loss):
         return img, ws
 
     def run_D(self, img, c, blur_sigma=0, update_emas=False, return_latents=False):
-        if not return_latents:
-            blur_size = np.floor(blur_sigma * 3)
-            if blur_size > 0:
-                with torch.autograd.profiler.record_function("blur"):
-                    f = torch.arange(-blur_size, blur_size + 1, device=img.device).div(blur_sigma).square().neg().exp2()
-                    img = upfirdn2d.filter2d(img, f / f.sum())
-        if self.augment_pipe is not None:
+        blur_size = np.floor(blur_sigma * 3)
+        if blur_size > 0:
+            with torch.autograd.profiler.record_function("blur"):
+                f = torch.arange(-blur_size, blur_size + 1, device=img.device).div(blur_sigma).square().neg().exp2()
+                img = upfirdn2d.filter2d(img, f / f.sum())
+        if self.augment_pipe is not None and not return_latents:
             img = self.augment_pipe(img)
         conditioned_logits, classification_logits = self.D(
             img, c, update_emas=update_emas, return_latents=return_latents
@@ -181,21 +180,31 @@ class StyleGAN2Loss(Loss):
             features, _ = self.D(img, c, return_features=True)
         return features
 
-    def accumulate_gradients(self, phase, real_img, real_c, gen_z, gen_c, gain, cur_nimg, disc_on_gen=False):
+    def accumulate_gradients(
+        self, phase, real_img, real_c, gen_z, gen_c, gain, cur_nimg, autoencoder_nimg, disc_on_gen=False
+    ):
         assert phase in ["Gmain", "Greg", "Gboth", "Dmain", "Dreg", "Dboth", "AE"]
         if self.pl_weight == 0:
             phase = {"Greg": "none", "Gboth": "Gmain"}.get(phase, phase)
         if self.r1_gamma == 0:
             phase = {"Dreg": "none", "Dboth": "Dmain"}.get(phase, phase)
 
-        # If training the autoencoder, update cur_nimg to avoid counting iterations when training the autoencoder
-        assert (
-            cur_nimg <= self.autoencoder_kimg and phase == "AE" or cur_nimg >= self.autoencoder_kimg
-        ), "cur_nimg must be less than or equal to autoencoder_kimg when training the autoencoder, and greater otherwise."
-        cur_nimg = cur_nimg - self.autoencoder_kimg if cur_nimg > self.autoencoder_kimg else cur_nimg
+        if phase == "AE":
+            with torch.autograd.profiler.record_function("AE_forward"):
+                logits, _ = self.run_D(real_img, real_c, blur_sigma=0, return_latents=True)
+                gen_img, _gen_ws = self.run_G(logits, real_c)
 
+                loss_AE = torch.nn.functional.l1_loss(gen_img, real_img)
+                training_stats.report("Loss/AE/loss", loss_AE)
+            with torch.autograd.profiler.record_function("AE_backward"):
+                loss_AE.mean().mul(gain).backward()
+            return
+
+        # The blur sigma takes into account only the number of images used for the adversarial training
         blur_sigma = (
-            max(1 - cur_nimg / (self.blur_fade_kimg * 1e3), 0) * self.blur_init_sigma if self.blur_fade_kimg > 0 else 0
+            max(1 - (cur_nimg - autoencoder_nimg) / (self.blur_fade_kimg * 1e3), 0) * self.blur_init_sigma
+            if self.blur_fade_kimg > 0
+            else 0
         )
 
         if phase == "AE":
@@ -348,8 +357,8 @@ class StyleGAN2Loss(Loss):
         with torch.no_grad():
             _, real_logits = self.D(real_img, real_c)
 
+            # Remove the padded elements
             if batch_size is not None and real_img.shape[0] < batch_size:
-                # Remove the padded elements
                 real_logits = real_logits[:actual_batch_size]
                 real_c = real_c[:actual_batch_size]
 
@@ -357,6 +366,8 @@ class StyleGAN2Loss(Loss):
             results_per_class = compute_class_prediction_accuracy(real_logits, real_c, label_map=self.label_map)
             for cls, classification_tensor in results_per_class.items():
                 training_stats.report(f"Accuracy/val/{cls}", classification_tensor)
+
+            # Compute confusion matrix and report
             confusion_matrix_dict = compute_confusion_matrix_dict(
                 real_logits, real_c, type="val", label_map=self.label_map
             )
@@ -369,7 +380,6 @@ class StyleGAN2Loss(Loss):
 
         self.D.train().requires_grad_(False)  # in main loop, we will set requires_grad to True for the discriminator
 
-    
     def evaluate_autoencoder(self, real_img, real_c, batch_size=None):
         if batch_size is not None:
             assert real_img.shape[0] <= batch_size, "Batch size must be equal or larger than the number of images."
@@ -402,8 +412,9 @@ class StyleGAN2Loss(Loss):
             loss_AE = torch.nn.functional.l1_loss(gen_img, real_img)
             training_stats.report("Loss/AE/val/loss", loss_AE)
 
-        self.D.train().requires_grad_(False)  # in main loop, we will set requires_grad to True for the discriminator
-        self.G.train().requires_grad_(False)  # in main loop, we will set requires_grad to True for the generator
+        # in main loop, we will set requires_grad to True
+        self.D.train().requires_grad_(False)
+        self.G.train().requires_grad_(False)
 
 
 # ----------------------------------------------------------------------------

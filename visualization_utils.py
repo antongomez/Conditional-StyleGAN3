@@ -1,7 +1,10 @@
-
 import json
-import numpy as np
+import math
+import os
+import warnings
+
 import matplotlib.pyplot as plt
+import numpy as np
 
 class_colors = {
     0: "#f4341c",
@@ -37,6 +40,7 @@ def extract_metrics(jsonl_data, class_labels):
         "Loss/D/loss",
         "Loss/r1_penalty",
         "Loss/D/reg",
+        "Loss/AE/loss",
         "Progress/tick",
         "Progress/kimg",
         "Timing/total_sec",
@@ -172,16 +176,18 @@ def summarize_training_options(json_path):
     batch_size = config.get("batch_size")
     uniform_class_labels = config.get("uniform_class_labels")
     disc_on_gen = config.get("disc_on_gen")
+    autoencoder_kimg = config.get("autoencoder_kimg")
     ada_target_present = "ada_target" in config
     ada_target_value = config.get("ada_target") if ada_target_present else None
 
     print("📋 Training Configuration Summary")
     print("────────────────────────────────────")
-    print(f"⚖️  Class weight: {class_weight}")
-    print(f"🖥️  Number of GPUs: {num_gpus}")
+    print(f"⚖️ Class weight: {class_weight}")
+    print(f"🖥️ Number of GPUs: {num_gpus}")
     print(f"📦 Batch size: {batch_size}")
     print(f"🎯 Uniform class labels: {uniform_class_labels}")
     print(f"🧪 Discriminator on generated images: {disc_on_gen}")
+    print(f"🖼️ Autoencoder kimg: {autoencoder_kimg}")
     if ada_target_present:
         print(f"🎛️  ADA target present ✅ → Value: {ada_target_value}")
     else:
@@ -206,13 +212,33 @@ def extract_confusion_matrix(jsonl_data, class_labels, progress_tick=None, data_
     return confusion_matrix
 
 
-def plot_metric(data, metrics, x_axis="Progress/kimg", colors=None, marker="o", title=None, ylim=None):
+def plot_metric(
+    data,
+    metrics,
+    x_axis="Progress/kimg",
+    colors=None,
+    marker="o",
+    title=None,
+    ylim=None,
+    start_tick=None,
+    end_tick=None,
+):
     """Plots specific metrics against the x-axis."""
     plt.figure(figsize=(10, 5))
+    start_idx = data["Progress/tick"].index(float(start_tick)) if start_tick is not None else 0
+    end_idx = (
+        data["Progress/tick"].index(float(end_tick)) + 1 if end_tick is not None else int(data["Progress/tick"][-1]) + 1
+    )
     for i, metric in enumerate(metrics):
         if metric in data:
             color = colors[i] if colors and i < len(colors) else None
-            plt.plot(data[x_axis], data[metric], label=metric, color=color, marker=marker)
+            plt.plot(
+                data[x_axis][start_idx:end_idx],
+                data[metric][start_idx:end_idx],
+                label=metric,
+                color=color,
+                marker=marker,
+            )
     plt.xlabel(x_axis)
     plt.ylabel("Metric Value")
     if ylim:
@@ -240,6 +266,18 @@ def print_accuracies_per_class(data, class_labels, last_ticks=10, data_type="val
     print(f"Average accuracies over the last {last_ticks} ticks: {formatted}")
 
 
+def _compute_stats(acc_list, clean_nan):
+    if not acc_list:
+        return None, None
+
+    accuracies = np.array(acc_list, dtype=np.float32)
+
+    if clean_nan:
+        accuracies = np.nan_to_num(accuracies, nan=0)
+
+    return np.mean(accuracies, axis=0), np.std(accuracies, axis=0)
+
+
 def compute_avg_accuracy(data, clean_nan, class_labels):
     """
     Computes the average accuracy from the classification loss metrics.
@@ -249,25 +287,21 @@ def compute_avg_accuracy(data, clean_nan, class_labels):
         + _build_classification_keys(class_labels, data_type="fake")
         + _build_classification_keys(class_labels, data_type="val")
     )
-    accuracies_train = [data[metric] for metric in classification_keys if metric.startswith("Accuracy/real/")]
-    accuracies_train_fake = [data[metric] for metric in classification_keys if metric.startswith("Accuracy/fake/")]
-    accuracies_val = [data[metric] for metric in classification_keys if metric.startswith("Accuracy/val/")]
-    if clean_nan:
-        accuracies_train = [np.nan_to_num(acc, nan=0) for acc in accuracies_train]
-        accuracies_train_fake = [np.nan_to_num(acc, nan=0) for acc in accuracies_train_fake]
-        accuracies_val = [np.nan_to_num(acc, nan=0) for acc in accuracies_val]
 
-    accuracies_train = np.array(accuracies_train)
-    accuracies_train_fake = np.array(accuracies_train_fake)
-    accuracies_val = np.array(accuracies_val)
-    return (
-        np.mean(accuracies_train, axis=0),
-        np.std(accuracies_train, axis=0),
-        np.mean(accuracies_train_fake, axis=0),
-        np.std(accuracies_train_fake, axis=0),
-        np.mean(accuracies_val, axis=0),
-        np.std(accuracies_val, axis=0),
-    )
+    try:
+        accuracies_train = [data[metric] for metric in classification_keys if metric.startswith("Accuracy/real/")]
+        accuracies_train_fake = [data[metric] for metric in classification_keys if metric.startswith("Accuracy/fake/")]
+    except KeyError:
+        # In some cases, classification metrics on train set will be missing, we ignore them
+        accuracies_train = []
+        accuracies_train_fake = []
+    accuracies_val = [data[metric] for metric in classification_keys if metric.startswith("Accuracy/val/")]
+
+    all_lists = [accuracies_train, accuracies_train_fake, accuracies_val]
+    all_stats_pairs = [_compute_stats(acc_list, clean_nan) for acc_list in all_lists]
+    flat_stats = [item for pair in all_stats_pairs for item in pair]
+
+    return tuple(flat_stats)
 
 
 def compute_overall_accuracy(classification_metrics):
@@ -284,9 +318,8 @@ def compute_overall_accuracy(classification_metrics):
     total_samples_train_fake = None
 
     for key, values in classification_metrics.items():
-        means = np.array(values["mean"])
-        means = np.nan_to_num(means, nan=0.0)
-        nums = np.array(values["num"])
+        means = np.array(values["mean"], dtype=np.float32)
+        nums = np.array(values["num"], dtype=np.float32)
 
         if key.startswith("Accuracy/val/"):
             if total_correct_val is None:
@@ -318,7 +351,14 @@ def compute_overall_accuracy(classification_metrics):
 
 
 def plot_accuracies(
-    data, class_labels=range(10), plot_std_in_avg_accuracy=True, plot_type="both", dataset="both", include_fake=False
+    data,
+    class_labels=range(10),
+    plot_std_in_avg_accuracy=True,
+    plot_type="both",
+    dataset="both",
+    include_fake=False,
+    start_tick=None,
+    end_tick=None,
 ):
     """
     Plots the overall accuracy, average accuracy, or both over time.
@@ -341,29 +381,38 @@ def plot_accuracies(
     if dataset not in ["train", "val", "both"]:
         raise ValueError("Invalid dataset. Choose from 'train', 'val', or 'both'.")
 
+    # Determine indices for the specified tick range
+    start_idx = data["Progress/tick"].index(float(start_tick)) if start_tick is not None else 0
+    end_idx = (
+        data["Progress/tick"].index(float(end_tick)) + 1 if end_tick is not None else int(data["Progress/tick"][-1]) + 1
+    )
+
+    # Extract Progress/kimg for the specified range
+    progress_kimg = data["Progress/kimg"][start_idx:end_idx]
+
     # Plot Overall Accuracy
     if plot_type in ["overall", "both"]:
         plt.figure(figsize=(10, 5))
         if dataset in ["train", "both"]:
             plt.plot(
-                data["Progress/kimg"],
-                data["overall_accuracy_train"],
+                progress_kimg,
+                data["overall_accuracy_train"][start_idx:end_idx],
                 label="Overall Accuracy Train",
                 marker="o",
                 color="skyblue",
             )
-            if include_fake and "overall_accuracy_train_fake" in data:
+            if include_fake:
                 plt.plot(
-                    data["Progress/kimg"],
-                    data["overall_accuracy_train_fake"],
+                    progress_kimg,
+                    data["overall_accuracy_train_fake"][start_idx:end_idx],
                     label="Overall Accuracy Train Fake",
                     marker="^",
                     color="purple",
                 )
         if dataset in ["val", "both"]:
             plt.plot(
-                data["Progress/kimg"],
-                data["overall_accuracy_val"],
+                progress_kimg,
+                data["overall_accuracy_val"][start_idx:end_idx],
                 label="Overall Accuracy Val",
                 marker="s",
                 color="orange",
@@ -385,6 +434,10 @@ def plot_accuracies(
 
     # Compute Average Accuracy and Standard Deviation
     if plot_type in ["average", "both"]:
+        avg_values = [
+            v[start_idx:end_idx] for v in compute_avg_accuracy(data, clean_nan=True, class_labels=class_labels)
+        ]
+
         (
             avg_accuracy_train,
             std_accuracy_train,
@@ -392,29 +445,33 @@ def plot_accuracies(
             std_accuracy_train_fake,
             avg_accuracy_val,
             std_accuracy_val,
-        ) = compute_avg_accuracy(data, clean_nan=True, class_labels=class_labels)
+        ) = avg_values
 
         if plot_type == "average":
             plt.figure(figsize=(10, 5))
         if dataset in ["train", "both"]:
             plt.plot(
-                data["Progress/kimg"], avg_accuracy_train, label="Average Train Accuracy", marker="o", color="green"
+                progress_kimg,
+                avg_accuracy_train,
+                label="Average Train Accuracy",
+                marker="o",
+                color="green",
             )
             if include_fake:
                 plt.plot(
-                    data["Progress/kimg"],
+                    progress_kimg,
                     avg_accuracy_train_fake,
                     label="Average Train Fake Accuracy",
                     marker="^",
                     color="purple",
                 )
         if dataset in ["val", "both"]:
-            plt.plot(data["Progress/kimg"], avg_accuracy_val, label="Average Val Accuracy", marker="s", color="red")
+            plt.plot(progress_kimg, avg_accuracy_val, label="Average Val Accuracy", marker="s", color="red")
 
         if plot_std_in_avg_accuracy:
             if dataset in ["train", "both"]:
                 plt.fill_between(
-                    data["Progress/kimg"],
+                    progress_kimg,
                     avg_accuracy_train - std_accuracy_train,
                     avg_accuracy_train + std_accuracy_train,
                     alpha=0.2,
@@ -423,7 +480,7 @@ def plot_accuracies(
                 )
                 if include_fake:
                     plt.fill_between(
-                        data["Progress/kimg"],
+                        progress_kimg,
                         avg_accuracy_train_fake - std_accuracy_train_fake,
                         avg_accuracy_train_fake + std_accuracy_train_fake,
                         alpha=0.2,
@@ -432,7 +489,7 @@ def plot_accuracies(
                     )
             if dataset in ["val", "both"]:
                 plt.fill_between(
-                    data["Progress/kimg"],
+                    progress_kimg,
                     avg_accuracy_val - std_accuracy_val,
                     avg_accuracy_val + std_accuracy_val,
                     alpha=0.2,
@@ -472,7 +529,7 @@ def plot_confusion_matrix(confusion_matrix, class_labels, title="Confusion Matri
     plt.title(title)
     plt.colorbar()
 
-    class_labels = [c+1 for c in class_labels]  # Assuming class labels are 0-indexed
+    class_labels = [c + 1 for c in class_labels]  # Assuming class labels are 0-indexed
 
     # Add labels to the axes
     tick_marks = np.arange(len(class_labels))
@@ -544,22 +601,16 @@ def extract_best_tick(
     )
     # Compute average accuracy and standard deviation
     (
-        avg_accuracy_train,
-        std_accuracy_train,
-        avg_accuracy_train_fake,
-        std_accuracy_train_fake,
-        avg_accuracy_val,
-        std_accuracy_val,
+        metrics["avg_accuracy_train"],
+        metrics["std_accuracy_train"],
+        metrics["avg_accuracy_train_fake"],
+        metrics["std_accuracy_train_fake"],
+        metrics["avg_accuracy_val"],
+        metrics["std_accuracy_val"],
     ) = compute_avg_accuracy(metrics, clean_nan=True, class_labels=class_labels)
-    metrics["avg_accuracy_train"] = avg_accuracy_train
-    metrics["std_accuracy_train"] = std_accuracy_train
-    metrics["avg_accuracy_train_fake"] = avg_accuracy_train_fake
-    metrics["std_accuracy_train_fake"] = std_accuracy_train_fake
-    metrics["avg_accuracy_val"] = avg_accuracy_val
-    metrics["std_accuracy_val"] = std_accuracy_val
 
     if performance_key == "avg":
-        accuracy_vals = avg_accuracy_val
+        accuracy_vals = metrics["avg_accuracy_val"]
     else:
         accuracy_vals = metrics["overall_accuracy_val"]
 
@@ -578,12 +629,42 @@ def extract_best_tick(
     best_tick_performance = dict(
         tick=metrics["Progress/tick"][best_tick],
         kimg=metrics["Progress/kimg"][best_tick],
-        avg_accuracy_train=avg_accuracy_train[best_tick],
-        std_accuracy_train=std_accuracy_train[best_tick],
-        avg_accuracy_val=avg_accuracy_val[best_tick],
-        std_accuracy_val=std_accuracy_val[best_tick],
+        avg_accuracy_train=metrics["avg_accuracy_train"][best_tick],
+        std_accuracy_train=metrics["std_accuracy_train"][best_tick],
+        avg_accuracy_val=metrics["avg_accuracy_val"][best_tick],
+        std_accuracy_val=metrics["std_accuracy_val"][best_tick],
         overall_accuracy_train=metrics["overall_accuracy_train"][best_tick],
         overall_accuracy_val=metrics["overall_accuracy_val"][best_tick],
     )
 
     return best_tick_performance
+
+
+def get_effective_autoencoder_kimg(training_options_path):
+    with open(training_options_path, "r") as f:
+        training_options = json.load(f)
+
+    batch_size = training_options.get("batch_size")
+    autoencoder_kimg = training_options.get("autoencoder_kimg", None)
+
+    if autoencoder_kimg is None:
+        warnings.warn("Warning: 'autoencoder_kimg' not found in training options.", UserWarning)
+        return 0
+
+    return math.ceil(autoencoder_kimg * 1000 / batch_size * batch_size)
+
+
+def compute_adversarial_starting_tick(training_options_path):
+    with open(training_options_path, "r") as f:
+        training_options = json.load(f)
+
+    batch_size = training_options.get("batch_size")
+    autoencoder_kimg = training_options.get("autoencoder_kimg", None)
+
+    if autoencoder_kimg is None:
+        warnings.warn("Warning: 'autoencoder_kimg' not found in training options.", UserWarning)
+        return 0
+
+    batches_per_tick = math.ceil(training_options.get("kimg_per_tick") * 1000 / batch_size)
+    adversarial_starting_tick = math.ceil((autoencoder_kimg * 1000 - batch_size) / (batches_per_tick * 8))
+    return adversarial_starting_tick

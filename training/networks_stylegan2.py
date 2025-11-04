@@ -13,12 +13,9 @@ https://github.com/NVlabs/stylegan2/blob/master/training/networks_stylegan2.py""
 
 import numpy as np
 import torch
-from torch_utils import misc
-from torch_utils import persistence
-from torch_utils.ops import conv2d_resample
-from torch_utils.ops import upfirdn2d
-from torch_utils.ops import bias_act
-from torch_utils.ops import fma
+
+from torch_utils import misc, persistence
+from torch_utils.ops import bias_act, conv2d_resample, fma, upfirdn2d
 
 # ----------------------------------------------------------------------------
 
@@ -840,6 +837,7 @@ class DiscriminatorEpilogue(torch.nn.Module):
         self.resolution = resolution
         self.img_channels = img_channels
         self.architecture = architecture
+        self.mbstd_num_channels = mbstd_num_channels
 
         if architecture == "skip":
             self.fromrgb = Conv2dLayer(img_channels, in_channels, kernel_size=1, activation=activation)
@@ -873,12 +871,26 @@ class DiscriminatorEpilogue(torch.nn.Module):
             x = x + self.fromrgb(img)
 
         # Main layers.
-        if self.mbstd is not None:
+        if self.mbstd is not None and not return_latents:
             x = self.mbstd(x)
+        elif self.mbstd is not None and return_latents:
+            # When returning latents, we still need to preserve the expected channel shape,
+            # but we don't want to compute the stddev, so we add zero-valued channels instead.
+            # This keeps the weights of the immediately following conv corresponding to these
+            # extra channels (self.mbstd_num_channels) untrained until adversarial training begins.
+            # In practice, this is equivalent to adding self.mbstd_num_channels input channels
+            # to the conv "on the fly" when switching from autoencoder pretraining to adversarial training.
+            n, c, h, w = x.shape
+            zeros = x.new_zeros(n, self.mbstd_num_channels, h, w)
+            x = torch.cat([x, zeros], dim=1)
+
         x = self.conv(x)
         x = self.fc(x.flatten(1))
         logits = self.out(x)
         # logits = self.out((x.flatten(1)))
+
+        if return_latents:
+            return logits, None
 
         if return_latents:
             return logits, None
@@ -975,7 +987,7 @@ class Discriminator(torch.nn.Module):
             return x, None
 
         cmap = None
-        if self.c_dim > 0 and not return_latents: # avoid unnecessary mapping when latents are requested
+        if self.c_dim > 0 and not return_latents:  # avoid unnecessary mapping when only request latents
             cmap = self.mapping(None, c)
 
         conditioned_logits, classification_logits = self.b4(x, img, cmap, return_latents=return_latents)

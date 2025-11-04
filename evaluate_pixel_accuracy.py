@@ -5,6 +5,7 @@ Script to evaluate a pretrained StyleGAN discriminator on multispectral images.
 import argparse
 import glob
 import json
+import math
 import os
 import re
 import time
@@ -22,6 +23,19 @@ from multispectral_utils import (
     init_dataset_kwargs,
 )
 from visualization_utils import extract_best_tick, read_jsonl
+
+
+def get_train_size(split_info_path):
+    with open(split_info_path, "r") as f:
+        split_info = json.load(f)
+    train_size = len(split_info.get("train_indices", []))
+    return train_size
+
+
+def compute_autoencoder_epochs(autoencoder_kimg, train_size):
+    if autoencoder_kimg is None:
+        return None
+    return math.ceil(autoencoder_kimg * 1000 / train_size)
 
 
 def print_accuracy_results(OA, AA, class_accuracies, title="Accuracy Results"):
@@ -199,7 +213,7 @@ def output_csv_line(
     csv_path = os.path.join(output_dir, output_filename)
 
     # Check valid training options keys
-    valid_keys = {"uniform_class", "disc_on_gen", "autoencoder"}
+    valid_keys = {"uniform_class", "disc_on_gen", "autoencoder_epochs"}
     for key in training_options.keys():
         if key not in valid_keys:
             raise ValueError(f"Invalid training option key: {key}. Valid keys are: {valid_keys}")
@@ -332,7 +346,7 @@ def main():
 
     # Optional arguments
     parser.add_argument("--split-format", type=str, default="json", choices=["json", "pickle", "npz"], help="Format for saving split information (default: json)")
-    parser.add_argument("--batch-size", type=int, default=64, help="Batch size for evaluation (default: 64)")
+    parser.add_argument("--batch-size", type=int, default=256, help="Batch size for evaluation (default: 256)")
     parser.add_argument("--remove", action="store_true", help="Remove other .pkl files in the experiment directory after selecting the best one")
     parser.add_argument("--selection-method", type=str, default="last", choices=["best_val_aa", "last"], help="Method for selecting the network snapshot (default: last)")
 
@@ -361,11 +375,9 @@ def main():
             remove_other_snapshots=args.remove,
         )
 
-    print("Loading discriminator...")
     # Load discriminator
     D, device = build_discriminator(args.network_pkl)
 
-    print("Initializing dataset...")
     # Initialize dataset
     test_set_kwargs, _ = init_dataset_kwargs(data=args.data_zip)
     test_set_kwargs.use_label_map = True
@@ -377,8 +389,6 @@ def main():
         data_loader_kwargs=data_loader_kwargs,
         batch_size=args.batch_size,
     )
-
-    print("Computing pixel-level accuracy...")
 
     start_time = time.time()
     oa, aa, class_accuracies = calculate_pixel_accuracy_optimized(
@@ -419,17 +429,20 @@ def main():
             args.experiment_dir = os.path.dirname(args.network_pkl)
             best_tick_performance, _ = get_best_tick_performance(args.experiment_dir, output_dir)
 
+        train_size = get_train_size(os.path.join(os.path.dirname(args.data_zip), "patches", "split_info.json"))
         with open(os.path.join(args.experiment_dir, "training_options.json"), "r") as f:
             training_options = json.load(f)
+
         training_options = {
             "uniform_class": training_options.get("uniform_class_labels", None),
             "disc_on_gen": training_options.get("disc_on_gen", None),
-            "autoencoder": training_options.get("autoencoder", None),
+            "autoencoder_epochs": compute_autoencoder_epochs(
+                training_options.get("autoencoder_kimg", None), train_size
+            ),
         }
-        output_dir = "."
 
         output_csv_line(
-            output_dir=output_dir,
+            output_dir=".",
             output_filename=args.output_csv,
             experiment_name=os.path.basename(args.experiment_dir),
             dataset_name=args.filename,
