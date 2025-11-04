@@ -3,12 +3,10 @@ Script to extract patches from multispectral datasets and split them into traini
 """
 
 import argparse
-from multispectral_utils import (
-    process_multispectral_dataset,
-    load_processed_dataset,
-    create_dataset_report,
-    validate_dataset_integrity,
-)
+
+from multispectral_utils import (create_dataset_report, load_processed_dataset,
+                                 process_multispectral_dataset,
+                                 validate_dataset_integrity)
 
 
 def main():
@@ -63,10 +61,10 @@ def main():
         )
         
         # Generate report
-        create_dataset_report(output_dir, args.split_format, seed=args.seed)
+        create_dataset_report(output_dir, seed=args.seed, split_format=args.split_format)
         
         # Validate integrity
-        validation_results = validate_dataset_integrity(output_dir, args.split_format)
+        validation_results = validate_dataset_integrity(output_dir, seed=args.seed, split_format=args.split_format)
         if validation_results['valid']:
             print("✓ Dataset integrity validation passed")
         else:
@@ -97,7 +95,7 @@ def main():
         print("=" * 60)
         
         # Generate comprehensive report
-        report_file = create_dataset_report(output_dir, args.split_format, seed=args.seed)
+        report_file = create_dataset_report(output_dir, seed=args.seed, split_format=args.split_format)
         print(f"Report generated: {report_file}")
         
         # Display report content
@@ -110,7 +108,7 @@ def main():
         print("=" * 60)
         
         # Validate dataset integrity
-        validation_results = validate_dataset_integrity(output_dir, args.split_format)
+        validation_results = validate_dataset_integrity(output_dir, seed=args.seed, split_format=args.split_format)
         
         if validation_results['valid']:
             print("✓ Dataset integrity validation passed")

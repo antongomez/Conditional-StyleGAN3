@@ -14,21 +14,18 @@ from datetime import datetime
 from pathlib import Path
 
 import dnnlib
-from multispectral_utils import (
-    build_discriminator,
-    build_test_dataset,
-    calculate_pixel_accuracy,
-    calculate_pixel_accuracy_optimized,
-    calculate_pixel_accuracy_ultra_optimized,
-    init_dataset_kwargs,
-)
+from multispectral_utils import (build_discriminator, build_test_dataset,
+                                 calculate_pixel_accuracy,
+                                 calculate_pixel_accuracy_optimized,
+                                 calculate_pixel_accuracy_ultra_optimized,
+                                 init_dataset_kwargs)
 from visualization_utils import extract_best_tick, read_jsonl
 
 
 def get_train_size(split_info_path):
     with open(split_info_path, "r") as f:
         split_info = json.load(f)
-    train_size = len(split_info.get("train_indices", []))
+    train_size = int(split_info.get("split_stats", {}).get("train_samples"))
     return train_size
 
 
@@ -246,7 +243,7 @@ def output_csv_line(
         f.write(",".join(map(str, values)) + "\n")
 
 
-def get_best_tick_performance(experiment_dir, output_dir):
+def get_best_tick_performance(experiment_dir, output_dir, seed=None):
     """
     Extracts the best tick performance from the experiment results.
 
@@ -259,7 +256,7 @@ def get_best_tick_performance(experiment_dir, output_dir):
 
     jsonl_data = read_jsonl(os.path.join(experiment_dir, "stats.jsonl"))
 
-    with open(os.path.join(output_dir, "processing_summary.json"), "r") as f:
+    with open(os.path.join(output_dir, "processing_summary" + (f"_{seed}" if seed is not None and seed != 0 else "") + ".json"), "r") as f:
         summary = json.load(f)
     label_map = summary.get("label_map", {})
     class_labels = [int(label) for label in label_map.keys()]
@@ -276,7 +273,7 @@ def get_best_tick_performance(experiment_dir, output_dir):
     return best_tick_performance, class_labels
 
 
-def select_network_snapshot(experiment_dir, output_dir, selection_method="best_val_aa", remove_other_snapshots=False):
+def select_network_snapshot(experiment_dir, output_dir, selection_method="best_val_aa", remove_other_snapshots=False, seed=None):
     """
     Selects a network snapshot from an experiment directory based on the specified method.
 
@@ -290,7 +287,7 @@ def select_network_snapshot(experiment_dir, output_dir, selection_method="best_v
         tuple: Path to the selected network snapshot and its performance data.
     """
 
-    best_tick_performance, class_labels = get_best_tick_performance(experiment_dir, output_dir)
+    best_tick_performance, class_labels = get_best_tick_performance(experiment_dir, output_dir, seed=seed)
     print(f"Class labels found: {class_labels}")
 
     if selection_method == "best_val_aa":
@@ -343,6 +340,7 @@ def main():
     parser.add_argument("--experiment-dir", default=None, help="Directory containing the experiment results (if network not provided)")
     parser.add_argument("--data-zip", type=str, required=True, help="Path to the zip file with images to evaluate")
     parser.add_argument("--filename", type=str, required=True, help="Base filename (without extension)")
+    parser.add_argument("--seed", type=int, default=None, help="Random seed for reproducibility (default: None)")
 
     # Optional arguments
     parser.add_argument("--split-format", type=str, default="json", choices=["json", "pickle", "npz"], help="Format for saving split information (default: json)")
@@ -373,6 +371,7 @@ def main():
             output_dir=output_dir,
             selection_method=args.selection_method,
             remove_other_snapshots=args.remove,
+            seed=args.seed,
         )
 
     # Load discriminator
@@ -429,7 +428,7 @@ def main():
             args.experiment_dir = os.path.dirname(args.network_pkl)
             best_tick_performance, _ = get_best_tick_performance(args.experiment_dir, output_dir)
 
-        train_size = get_train_size(os.path.join(os.path.dirname(args.data_zip), "patches", "split_info.json"))
+        train_size = get_train_size(os.path.join(os.path.dirname(args.data_zip), "patches", "split_info" + (f"_{args.seed}" if args.seed is not None and args.seed != 0 else "") + ".json"))
         with open(os.path.join(args.experiment_dir, "training_options.json"), "r") as f:
             training_options = json.load(f)
 

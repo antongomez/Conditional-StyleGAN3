@@ -3,11 +3,12 @@ Main utility module for multispectral image processing.
 Provides high-level functions that combine functionality from other modules.
 """
 
-import os
 import json
+import os
 from datetime import datetime
+
 from .data_readers import load_multispectral_dataset
-from .data_splitter import split_dataset, save_split_info, load_split_info
+from .data_splitter import load_split_info, save_split_info, split_dataset
 from .patch_extractor import batch_extract_patches, get_patch_statistics
 
 
@@ -71,7 +72,8 @@ def process_multispectral_dataset(input_dir, filename, output_dir,
         'output_dir': output_dir
     }
     
-    split_file = os.path.join(output_dir, f"split_info.{split_format}")
+    split_filename = "split_info" + (f"_{seed}" if seed is not None and seed != 0 else "") + f".{split_format}"
+    split_file = os.path.join(output_dir, split_filename)
     save_split_info(train_centers, val_centers, test_centers, label_map, 
                    split_file, split_metadata, split_format)
     
@@ -116,7 +118,7 @@ def process_multispectral_dataset(input_dir, filename, output_dir,
     }
     
     # Save processing summary
-    summary_file = os.path.join(output_dir, "processing_summary.json")
+    summary_file = os.path.join(output_dir, "processing_summary" + (f"_{seed}" if seed is not None and seed != 0 else "") + ".json")
     with open(summary_file, 'w') as f:
         # Convert numpy types for JSON serialization
         json_results = json.loads(json.dumps(results, default=str))
@@ -126,19 +128,21 @@ def process_multispectral_dataset(input_dir, filename, output_dir,
     return results
 
 
-def load_processed_dataset(output_dir, split_format='json'):
+def load_processed_dataset(output_dir, seed=None, split_format='json'):
     """
     Load a previously processed multispectral dataset.
     
     Args:
         output_dir: Directory containing processed data
+        seed: Random seed used during processing (if any)
         split_format: Format of split info file ('json', 'pickle', 'npz')
         
     Returns:
         dict: Dictionary with loaded dataset information
     """
     # Load split information
-    split_file = os.path.join(output_dir, f"split_info.{split_format}")
+    split_filename = "split_info" + (f"_{seed}" if seed is not None and seed != 0 else "") + f".{split_format}"
+    split_file = os.path.join(output_dir, split_filename)
     split_info = load_split_info(split_file, split_format)
     
     # Load dataset JSON files
@@ -149,8 +153,7 @@ def load_processed_dataset(output_dir, split_format='json'):
             json_paths[split_name] = json_path
     
     # Load processing summary if available
-    summary_file = os.path.join(output_dir, "processing_summary.json")
-    summary = None
+    summary_file = os.path.join(output_dir, "processing_summary" + (f"_{seed}" if seed is not None and seed != 0 else "") + ".json")
     if os.path.exists(summary_file):
         with open(summary_file, 'r') as f:
             summary = json.load(f)
@@ -220,22 +223,23 @@ def create_split_distribution_table(dataset_json_paths):
     return table_lines
 
 
-def create_dataset_report(output_dir, split_format='json', seed=None):
+def create_dataset_report(output_dir, seed=None, split_format='json'):
     """
     Create a comprehensive report of the processed dataset.
     
     Args:
         output_dir: Directory containing processed data
+        seed: Random seed used during processing (if any)
         split_format: Format of split info file
         
     Returns:
         str: Path to the generated report
     """
-    from .patch_extractor import get_patch_statistics
     from .data_splitter import get_split_statistics
-    
+    from .patch_extractor import get_patch_statistics
+
     # Load processed dataset
-    dataset = load_processed_dataset(output_dir, split_format)
+    dataset = load_processed_dataset(output_dir, seed, split_format)
     
     report_lines = []
     report_lines.append("=" * 60)
@@ -256,6 +260,11 @@ def create_dataset_report(output_dir, split_format='json', seed=None):
     report_lines.append("DATASET SPLIT STATISTICS")
     report_lines.append("-" * 30)
     split_stats = get_split_statistics(dataset['split_info'])
+    report_lines.append(f"  Training samples: {split_stats.get('train_samples', 0)}")
+    report_lines.append(f"  Validation samples: {split_stats.get('validation_samples', 0)}")
+    report_lines.append(f"  Test samples: {split_stats.get('test_samples', 0)}")
+    report_lines.append(f"  Total samples: {split_stats.get('total_samples', 0)}")
+    report_lines.append(f"  Number of classes: {split_stats.get('num_classes', 0)}")
     report_lines.append("")
 
     # Add the detailed distribution table
@@ -291,12 +300,13 @@ def create_dataset_report(output_dir, split_format='json', seed=None):
     return report_file
 
 
-def validate_dataset_integrity(output_dir, split_format='json'):
+def validate_dataset_integrity(output_dir, seed=None, split_format='json'):
     """
     Validate the integrity of a processed dataset.
     
     Args:
         output_dir: Directory containing processed data
+        seed: Random seed used during processing (if any)
         split_format: Format of split info file
         
     Returns:
@@ -309,7 +319,8 @@ def validate_dataset_integrity(output_dir, split_format='json'):
     }
     
     # Check if split info file exists
-    split_file = os.path.join(output_dir, f"split_info.{split_format}")
+    split_filename = "split_info" + (f"_{seed}" if seed is not None and seed != 0 else "") + f".{split_format}"
+    split_file = os.path.join(output_dir, split_filename)
     if not os.path.exists(split_file):
         results['valid'] = False
         results['errors'].append(f"Split info file not found: {split_file}")
