@@ -339,6 +339,7 @@ def main():
     parser.add_argument("--network", dest="network_pkl", type=str, default=None, help="Discriminator pickle filename")
     parser.add_argument("--experiment-dir", default=None, help="Directory containing the experiment results (if network not provided)")
     parser.add_argument("--data-zip", type=str, required=True, help="Path to the zip file with images to evaluate")
+    parser.add_argument("--input-path", type=str, default="./data", help="Path to the input multispectral dataset")
     parser.add_argument("--filename", type=str, required=True, help="Base filename (without extension)")
     parser.add_argument("--seed", type=int, default=None, help="Random seed for reproducibility (default: None)")
 
@@ -354,8 +355,8 @@ def main():
     # fmt: on
 
     args = parser.parse_args()
-    input_dir = f"./data/{args.filename}"
-    output_dir = f"./data/{args.filename}/patches"
+    input_dir = os.path.join(args.input_path, args.filename)
+    output_dir = os.path.join(args.input_path, args.filename, "patches")
 
     # Check if network path is provided, if not extract the best network based in validation AA
     if args.network_pkl is None and args.experiment_dir is None:

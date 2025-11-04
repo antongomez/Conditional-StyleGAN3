@@ -3,6 +3,7 @@ Script to extract patches from multispectral datasets and split them into traini
 """
 
 import argparse
+import os
 
 from multispectral_utils import (create_dataset_report, load_processed_dataset,
                                  process_multispectral_dataset,
@@ -14,6 +15,8 @@ def main():
     parser = argparse.ArgumentParser(description="Process multispectral images using the utilities package")
     
     # Add arguments
+    parser.add_argument("--input-path", type=str, default="./data", 
+                       help="Path to the input multispectral dataset")
     parser.add_argument("--filename", type=str, default="oitaven", 
                        help="Base filename (without extension)")
     parser.add_argument("--rgb", action="store_true", default=False, 
@@ -38,8 +41,8 @@ def main():
                        help="Mode of operation (default: process)")
     
     args = parser.parse_args()
-    input_dir = f"./data/{args.filename}"
-    output_dir = f"./data/{args.filename}/patches"
+    input_dir = os.path.join(args.input_path, args.filename)
+    output_dir = os.path.join(args.input_path, args.filename, "patches")
     
     if args.mode == "process":
         print("=" * 60)
