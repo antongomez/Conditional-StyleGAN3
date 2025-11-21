@@ -22,16 +22,17 @@ def init_dataset_kwargs(data):
     return dataset_kwargs, dataset_obj.name
 
 
-def build_test_dataset(test_dataset_kwargs: dict = None, data_loader_kwargs: dict = None, batch_size: int = 64):
-    test_dataset = dnnlib.util.construct_class_by_name(**test_dataset_kwargs)  # subclass of training.dataset.Dataset
-    test_dataloader = torch.utils.data.DataLoader(
-        dataset=test_dataset,
+def build_dataset(dataset_kwargs: dict = None, data_loader_kwargs: dict = None, batch_size: int = 64, verbose=True):
+    dataset = dnnlib.util.construct_class_by_name(**dataset_kwargs)
+    dataloader = torch.utils.data.DataLoader(
+        dataset=dataset,
         batch_size=batch_size,
         **data_loader_kwargs,
     )
-    print("Test dataset iterator built with batch size:", batch_size)
+    if verbose:
+        print("Dataset iterator built with batch size:", batch_size)
 
-    return test_dataset, test_dataloader
+    return dataset, dataloader
 
 
 def build_discriminator(network_pkl: str, device: str = "cuda"):
