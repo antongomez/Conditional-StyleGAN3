@@ -1,12 +1,94 @@
 import time
+import warnings
 
 import numpy as np
+import scipy
 import torch
 
 
-def calculate_fid(judge_model, examples_1, examples_2, device="cpu"):
-    """Mock function to calculate the FID."""
-    return 0
+def calculate_fid(model, examples_1, examples_2, device="cpu"):
+    """Calculates the Fréchet Inception Distance (FID) between two sets of examples.
+
+    The FID is a measure of similarity between two sets of images. It is calculated
+    by comparing the statistics of feature representations from an intermediate layer
+    of a pre-trained network.
+
+    Args:
+        model (torch.nn.Module): The feature extractor network (e.g., InceptionV3).
+        examples_1 (torch.Tensor or list): A batch of images from the first set (e.g., real images).
+        examples_2 (torch.Tensor or list): A batch of images from the second set (e.g., generated images).
+        device (str, optional): The device to use for computation ('cpu' or 'cuda'). Defaults to "cpu".
+
+    Raises:
+        ValueError: If the FID calculation results in a complex number with a
+                    significant imaginary component, indicating a numerical instability.
+
+    Returns:
+        float: The calculated FID score.
+    """
+
+    act1 = None
+    act2 = None
+
+    model = model.to(device)
+
+    if isinstance(examples_1, list):
+        examples_1 = torch.stack(examples_1)
+    if isinstance(examples_2, list):
+        examples_2 = torch.stack(examples_2)
+
+    examples_1 = examples_1.to(device)
+    examples_2 = examples_2.to(device)
+
+    with torch.no_grad():
+        _, features = model(examples_1)
+        act1 = features.cpu().numpy()
+        del examples_1, features, _
+        torch.cuda.empty_cache()
+
+        _, features = model(examples_2)
+        act2 = features.cpu().numpy()
+        del examples_2, features, _
+
+    mu1, sigma1 = np.mean(act1, axis=0), np.cov(act1, rowvar=False)
+    mu2, sigma2 = np.mean(act2, axis=0), np.cov(act2, rowvar=False)
+
+    # Check that it is symmetric
+    if not np.allclose(sigma1, sigma1.T, atol=1e-6):
+        warnings.warn("Sigma1 is not symmetric")
+    else:
+        warnings.warn("Sigma1 is symmetric")
+    if not np.allclose(sigma2, sigma2.T, atol=1e-6):
+        warnings.warn("Sigma2 is not symmetric")
+    else:
+        warnings.warn("Sigma2 is symmetric")
+
+    diff = mu1 - mu2
+
+    sigma1 = sigma1.astype(np.float64)
+    sigma2 = sigma2.astype(np.float64)
+
+    # Product might be almost singular
+    covmean = scipy.linalg.sqrtm(sigma1.dot(sigma2))
+    if not np.isfinite(covmean).all():
+        print(f"[!] FID calculation produces a singular product; adding {1e-6} to diagonal of cov estimates")
+        offset = np.eye(sigma1.shape[0]) * 1e-6
+        covmean = scipy.linalg.sqrtm((sigma1 + offset).dot(sigma2 + offset))
+
+    # Numerical error might give slight imaginary component
+    if np.iscomplexobj(covmean):
+        if not np.allclose(np.diagonal(covmean).imag, 0, atol=1e-3):
+            m = np.max(np.abs(covmean.imag))
+            raise ValueError(f"[!] FID calculation produces complex value: {m}")
+        covmean = covmean.real
+
+    tr_covmean = np.trace(covmean)
+    fid = diff.dot(diff) + np.trace(sigma1) + np.trace(sigma2) - 2 * tr_covmean
+
+    del act1, act2, mu1, mu2, sigma1, sigma2, diff, covmean, tr_covmean
+    torch.cuda.empty_cache()
+
+    return fid
 
 
 def batch_pairwise_distances(U, V):
@@ -235,20 +317,29 @@ def knn_precision_recall_features(
 
 
 def compute_precision_recall(judge_model, examples_1, examples_2, device="cpu"):
+    """Computes k-NN precision and recall between two sets of examples using a judge model."""
+
+    judge_model = judge_model.to(device)
+
+    if isinstance(examples_1, list):
+        examples_1 = torch.stack(examples_1)
+    if isinstance(examples_2, list):
+        examples_2 = torch.stack(examples_2)
+
+    examples_1 = examples_1.to(device)
+    examples_2 = examples_2.to(device)
+
     # Extract features using the judge model
     features_1 = []
     features_2 = []
 
     # Disable gradient calculation for inference
     with torch.no_grad():
-        examples_1.to(device)
-        examples_2.to(device)
+        _, features_1 = judge_model(examples_1)
+        features_1 = features_1.cpu().numpy()
 
-        _, features = judge_model(examples_1)
-        features_1 = features.cpu().numpy()
-
-        _, features = judge_model(examples_2)
-        features_2 = features.cpu().numpy()
+        _, features_2 = judge_model(examples_2)
+        features_2 = features_2.cpu().numpy()
 
     state = knn_precision_recall_features(features_1, features_2, row_batch_size=10000, col_batch_size=50000)
     precision = state["precision"][0]

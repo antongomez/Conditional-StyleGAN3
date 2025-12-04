@@ -26,7 +26,6 @@ The script performs the following steps:
 import argparse
 import os
 import random
-import sys
 import time
 
 import numpy as np
@@ -101,9 +100,12 @@ def get_train_samples(dataset, sampling, experiment_index, num_experiments):
 
     samples = []
     for class_idx in class_indexes.keys():
-        samples.extend([dataset[j][0] for j in class_indexes[class_idx]])  # do not store the label
+        new_samples = [
+            torch.from_numpy(dataset[j][0]).to(torch.float32) / 127.5 - 1 for j in class_indexes[class_idx]
+        ]  # do not store the label
+        samples.extend(new_samples)
 
-    return samples
+    return torch.stack(samples)
 
 
 def obtain_samples_from_pool(pool, classes, num_samples):
@@ -121,9 +123,9 @@ def get_synthetic_samples(pool, classes, num_samples):
     samples = []
     for class_idx in classes:
         samples_class = obtain_samples_from_pool(pool, [class_idx], num_samples)
-        samples_class = [np.transpose(sample[0].cpu().numpy(), (2, 0, 1)) for sample in samples_class]
+        samples_class = [np.transpose(sample[0].cpu(), (2, 0, 1)) for sample in samples_class]
         samples.extend(samples_class)
-    return samples
+    return torch.stack(samples)
 
 
 parser = argparse.ArgumentParser(description="Hyperspectral Image Classification")
@@ -233,7 +235,7 @@ for i, class_idx in enumerate(class_labels):
 pool_mean = samples.mean().item()
 pool_var = samples.var().item()
 pool_std = np.sqrt(pool_var)
-print("Pool stats:")
+print("-" * 20 + "\nPool stats:")
 print(f"Mean: {pool_mean:.6f}")
 print(f"Std: {pool_std:.6f}")
 
@@ -245,20 +247,22 @@ if True:
 
     for split in ["train", "test"]:
         for image, label in datasets[split]:
+            image = image.astype(np.float32) / 127.5 - 1  # Normalize image to [-1, 1]
             means[split] += image.mean()
         means[split] = means[split] / len(datasets[split])
         for image, label in datasets[split]:
+            image = image.astype(np.float32) / 127.5 - 1  # Normalize image to [-1, 1]
             vars[split] += (image.mean() - means[split]) ** 2
         vars[split] = vars[split] / len(datasets[split])
         stds[split] = np.sqrt(vars[split])
-        print(f"{split.capitalize()} set stats:")
+        print("-" * 20 + f"\n{split.capitalize()} set stats:")
         print(f"Mean: {means[split]:.6f}")
         print(f"Std: {stds[split]:.6f}")
 
     scale_factor = stds["train"] / pool_std
     shift = pool_mean - means["train"]
+    print("-" * 20 + f"\nShift: {shift:.6f}")
     print(f"Scale factor: {scale_factor:.6f}")
-    print(f"Shift: {shift:.6f}")
 
     if args.synthetic_norm:
         # Normalize the image pool
@@ -277,7 +281,7 @@ if True:
 
 
 ##########################################################################################
-# ------------------------------------ COMPUTE FID ------------------------------------- #
+# --------------------------------- LOAD JUDGE MODEL ----------------------------------- #
 ##########################################################################################
 
 # Load the serialized torch object (judge model)
@@ -286,71 +290,78 @@ judge_model.load_state_dict(torch.load(args.fid_model_path, map_location=device)
 judge_model.to(device)
 judge_model.eval()
 
+##########################################################################################
+# ------------------------------------ COMPUTE FID ------------------------------------- #
+##########################################################################################
 
-if args.fid_model_path is not None:
-    print("Calculating FID")
 
-    sampling = 10
-    assert sampling <= args.pool_size, f"Sampling ({sampling}) must be less or equal than pool size ({args.pool_size})"
-    experiments = 5
+print("-" * 20 + "\nCalculating FID")
 
-    fids = []
-    times = []
+sampling_fid = args.pool_size // 2
+assert (
+    sampling_fid <= args.pool_size
+), f"Sampling ({sampling_fid}) must be less or equal than pool size ({args.pool_size})"
 
-    rev_label_map = datasets["train"].get_rev_label_map()
+experiments_fid = 5
 
-    for i in range(experiments):
-        start = time.time()
+fid_results = []
+fid_times = []
 
-        examples_1 = get_train_samples(datasets["train"], sampling, i, experiments)
-        examples_2 = get_synthetic_samples(pool, class_labels, sampling)
+for i in range(experiments_fid):
+    start = time.time()
 
-        fids.append(calculate_fid(judge_model, examples_1, examples_2, device=device))
-        end = time.time()
-        times.append(end - start)
+    examples_1 = get_train_samples(datasets["train"], sampling_fid, i, experiments_fid)
+    examples_2 = get_synthetic_samples(pool, class_labels, sampling_fid)
 
-    # Show the results
-    print(f"FID: {np.mean(fids):.6f} +/- {np.std(fids):.6f}")
-    print(f"Time: {np.mean(times):.6f} +/- {np.std(times):.6f}")
+    fid_results.append(calculate_fid(judge_model, examples_1, examples_2, device=device))
+    fid_times.append(time.time() - start)
+
 
 ##########################################################################################
 # ---------------------------- COMPUTE PRECISION AND RECALL -----------------------------#
 ##########################################################################################
 
-experiments = 5
 
-precision_mean = []
-recall_mean = []
-precision_std = []
-recall_std = []
+print("-" * 20 + "\nCalculating Precision and Recall")
+
+sampling_pr = args.pool_size
+assert (
+    sampling_pr <= args.pool_size
+), f"Sampling ({sampling_pr}) must be less or equal than pool size ({args.pool_size})"
+
+experiments_pr = 5
 
 times_mean = []
 times_std = []
 
-sampling = 20  # 200
+precision_results = []
+recall_results = []
+precision_recall_times = []
 
-results_precission = []
-results_recall = []
-result_times = []
-
-for i in range(experiments):
+for i in range(experiments_pr):
     start = time.time()
 
-    examples_1 = get_train_samples(datasets["train"], sampling, i, experiments)
-    examples_2 = get_synthetic_samples(pool, class_labels, sampling)
+    examples_1 = get_train_samples(datasets["train"], sampling_pr, i, experiments_pr)
+    examples_2 = get_synthetic_samples(pool, class_labels, sampling_pr)
 
     # Extract features using the judge model
     features_1 = []
     features_2 = []
 
-    # precision, recall = compute_precision_recall(judge_model, examples_1, examples_2, device=device)
-    precision = recall = 0.0  # REMOVE WHEN THE MODEL IS AVAILABLE
+    precision, recall = compute_precision_recall(judge_model, examples_1, examples_2, device=device)
 
-    results_precission.append(precision)
-    results_recall.append(recall)
-    result_times.append(time.time() - start)
+    precision_results.append(precision)
+    recall_results.append(recall)
+    precision_recall_times.append(time.time() - start)
 
+##########################################################################################
+# ------------------------------------- SHOW RESULTS ----------------------------------- #
+##########################################################################################
 
-print(f"Precision: {np.mean(results_precission):.6f} +/- {np.std(results_precission):.6f}")
-print(f"Recall: {np.mean(results_recall):.6f} +/- {np.std(results_recall):.6f}")
-print(f"Time: {np.mean(result_times):.6f} +/- {np.std(result_times):.6f}")
+# Show the results
+print("-" * 20 + "\nFinal results:")
+print(f"FID: {np.mean(fid_results):.6f} +/- {np.std(fid_results):.6f}")
+print(f"Time: {np.mean(fid_times):.6f} +/- {np.std(fid_times):.6f}")
+print(f"Precision: {np.mean(precision_results):.6f} +/- {np.std(precision_results):.6f}")
+print(f"Recall: {np.mean(recall_results):.6f} +/- {np.std(recall_results):.6f}")
+print(f"Time: {np.mean(precision_recall_times):.6f} +/- {np.std(precision_recall_times):.6f}")
