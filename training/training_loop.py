@@ -13,6 +13,7 @@ import json
 import os
 import pickle
 import time
+from typing import Tuple
 
 import numpy as np
 import PIL.Image
@@ -71,23 +72,22 @@ def setup_snapshot_image_grid(training_set, random_seed=0):
 # ----------------------------------------------------------------------------
 
 
-def save_image_grid(img, fname, drange, grid_size):
+def save_image_grid(img, fname, drange, grid_size, save_rgb=True):
     """Save a grid of images into a single image file."""
     lo, hi = drange
     img = np.asarray(img, dtype=np.float32)
 
     gw, gh = grid_size
-    _N, C, H, W = img.shape
-    img = img.reshape([gh, gw, C, H, W])
-    img = img.transpose(0, 3, 1, 4, 2)
+    _N, H, W, C = img.shape
+    img = img.reshape([gh, gw, H, W, C])
+    img = img.transpose(0, 2, 1, 3, 4)
     img = img.reshape([gh * H, gw * W, C])
 
-    img_f32 = img.copy()  # save a copy in float32 format for raw
-    img = (img_f32 - lo) * (255 / (hi - lo))
-    img = np.rint(img).clip(0, 255).astype(np.uint8)
+    # Save a copy keeping the original range
+    original_img = img.copy()
 
-    img_f32 = (img_f32 - lo) / (hi - lo)  # normalize to [0, 1] for raw
-    img_f32 = img_f32.clip(0, 1).astype(np.float32)
+    img = (img - lo) * (255 / (hi - lo))
+    img = np.rint(img).clip(0, 255).astype(np.uint8)
 
     assert C in [1, 3, 5], f"Invalid value for C: {C}. Must be one of [1, 3, 5]."
     if C == 1:
@@ -95,15 +95,16 @@ def save_image_grid(img, fname, drange, grid_size):
     if C == 3:
         PIL.Image.fromarray(img, "RGB").save(fname)
     if C == 5:
-        PIL.Image.fromarray(img[:, :, [2, 1, 0]], "RGB").save(fname)  # Select rgb channels
+        if save_rgb:
+            PIL.Image.fromarray(img[:, :, [2, 1, 0]], "RGB").save(fname)  # Select rgb channels
         # Save as raw image with all channels
-        save_raw_image(fname.replace(".png", ".raw"), img_f32)
+        save_raw_image(fname.replace(".png", ".raw"), original_img, drange=drange)
 
 
 # ----------------------------------------------------------------------------
 
 
-def save_raw_image(filename: str, image: np.ndarray):
+def save_raw_image(filename: str, image: np.ndarray, drange: Tuple[float, float] = (-1, 1)):
     """
     Save a multi-channel image to a .raw file in the format:
     [num_channels, height, width] (uint32) + image data (uint32).
@@ -114,30 +115,24 @@ def save_raw_image(filename: str, image: np.ndarray):
     Args:
         filename (str): path to the output .raw file
         image (np.ndarray): array with shape (height, width, num_channels)
+        drange (Tuple[float, float]): range of the input image values
     """
     if image.ndim != 3:
         raise ValueError("Image must have 3 dimensions: (height, width, num_channels)")
 
     height, width, num_channels = image.shape
-    image = image.astype(np.float64)
+    lo, hi = drange
 
-    # Normalize and scale to uint16 range [0, 65535]
-    if image.min() >= -1 and image.max() <= 1:
-        image = ((image + 1) / 2 * 65535).clip(0, 65535).astype(np.uint32)
-    elif image.min() >= 0 and image.max() <= 1:
-        image = (image * 65535).clip(0, 65535).astype(np.uint32)
-    elif image.min() >= 0 and image.max() <= 255:
-        image = ((image / 255.0) * 65535).clip(0, 65535).astype(np.uint32)
-    else:
-        raise ValueError("Image values must be in range [-1, 1], [0, 1], or [0, 255].")
+    # Normalize image and convert to uint32
+    image = image.astype(np.float32)
+    image = (image - lo) * (65535 / (hi - lo))
+    image = np.rint(image).clip(0, 65535).astype(np.uint32)
 
-    # Header remains uint32
     header = np.array([num_channels, height, width], dtype=np.uint32)
 
-    # Write file
     with open(filename, "wb") as f:
         header.tofile(f)
-        image.tofile(f)  # image is saved also as uint32
+        image.tofile(f)
 
 
 # ----------------------------------------------------------------------------

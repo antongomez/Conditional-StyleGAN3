@@ -14,11 +14,14 @@ from datetime import datetime
 from pathlib import Path
 
 import dnnlib
-from multispectral_utils import (build_discriminator, build_test_dataset,
-                                 calculate_pixel_accuracy,
-                                 calculate_pixel_accuracy_optimized,
-                                 calculate_pixel_accuracy_ultra_optimized,
-                                 init_dataset_kwargs)
+from multispectral_utils import (
+    build_dataset,
+    build_discriminator,
+    calculate_pixel_accuracy,
+    calculate_pixel_accuracy_optimized,
+    calculate_pixel_accuracy_ultra_optimized,
+    init_dataset_kwargs,
+)
 from visualization_utils import extract_best_tick, read_jsonl
 
 
@@ -256,7 +259,12 @@ def get_best_tick_performance(experiment_dir, output_dir, seed=None):
 
     jsonl_data = read_jsonl(os.path.join(experiment_dir, "stats.jsonl"))
 
-    with open(os.path.join(output_dir, "processing_summary" + (f"_{seed}" if seed is not None and seed != 0 else "") + ".json"), "r") as f:
+    with open(
+        os.path.join(
+            output_dir, "processing_summary" + (f"_{seed}" if seed is not None and seed != 0 else "") + ".json"
+        ),
+        "r",
+    ) as f:
         summary = json.load(f)
     label_map = summary.get("label_map", {})
     class_labels = [int(label) for label in label_map.keys()]
@@ -273,7 +281,9 @@ def get_best_tick_performance(experiment_dir, output_dir, seed=None):
     return best_tick_performance, class_labels
 
 
-def select_network_snapshot(experiment_dir, output_dir, selection_method="best_val_aa", remove_other_snapshots=False, seed=None):
+def select_network_snapshot(
+    experiment_dir, output_dir, selection_method="best_val_aa", remove_other_snapshots=False, seed=None
+):
     """
     Selects a network snapshot from an experiment directory based on the specified method.
 
@@ -384,8 +394,8 @@ def main():
     data_loader_kwargs = dnnlib.EasyDict(pin_memory=True, prefetch_factor=2, num_workers=0)
 
     # Build test dataset and dataloader
-    test_dataset, test_dataloader = build_test_dataset(
-        test_dataset_kwargs=test_set_kwargs,
+    test_dataset, test_dataloader = build_dataset(
+        dataset_kwargs=test_set_kwargs,
         data_loader_kwargs=data_loader_kwargs,
         batch_size=args.batch_size,
     )
@@ -429,7 +439,13 @@ def main():
             args.experiment_dir = os.path.dirname(args.network_pkl)
             best_tick_performance, _ = get_best_tick_performance(args.experiment_dir, output_dir)
 
-        train_size = get_train_size(os.path.join(os.path.dirname(args.data_zip), "patches", "split_info" + (f"_{args.seed}" if args.seed is not None and args.seed != 0 else "") + ".json"))
+        train_size = get_train_size(
+            os.path.join(
+                os.path.dirname(args.data_zip),
+                "patches",
+                "split_info" + (f"_{args.seed}" if args.seed is not None and args.seed != 0 else "") + ".json",
+            )
+        )
         with open(os.path.join(args.experiment_dir, "training_options.json"), "r") as f:
             training_options = json.load(f)
 
