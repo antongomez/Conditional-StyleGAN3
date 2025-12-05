@@ -530,13 +530,6 @@ def training_loop(
                 print()
                 print("Aborting...")
 
-        # Save image snapshot.
-        if (rank == 0) and (image_snapshot_ticks is not None) and (done or cur_tick % image_snapshot_ticks == 0):
-            images = torch.cat([G_ema(z=z, c=c, noise_mode="const").cpu() for z, c in zip(grid_z, grid_c)]).numpy()
-            save_image_grid(
-                images, os.path.join(run_dir, f"fakes{cur_nimg//1000:06d}.png"), drange=[-1, 1], grid_size=grid_size
-            )
-
         # Evaluate validation set
         if loss_kwargs.class_weight > 0:
             if rank == 0:
@@ -582,6 +575,18 @@ def training_loop(
 
         # This line works as expected as long as tick interval is at least 1 kimg
         is_best_so_far = cur_nimg // 1000 == best_val_avg_acc_tick  # Always true at the beginning
+
+        # Save image snapshot.
+        if (
+            (rank == 0)
+            and (image_snapshot_ticks is not None)
+            and (done or cur_tick % image_snapshot_ticks == 0)
+            and (save_all_snaps or is_best_so_far or done)
+        ):
+            images = torch.cat([G_ema(z=z, c=c, noise_mode="const").cpu() for z, c in zip(grid_z, grid_c)]).numpy()
+            save_image_grid(
+                images, os.path.join(run_dir, f"fakes{cur_nimg//1000:06d}.png"), drange=[-1, 1], grid_size=grid_size
+            )
 
         if (
             network_snapshot_ticks is not None
