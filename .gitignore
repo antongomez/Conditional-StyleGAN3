@@ -30,3 +30,6 @@ job_outputs/
 
 # Ignore Gimini files
 GEMINI.md
+
+# Ignore judge models
+oitaven_judge*.pth
