@@ -192,6 +192,7 @@ def training_loop(
     best_val_avg_acc = 0.0
     best_val_avg_acc_tick = 0
     best_snapshot_pkl_path = None
+    best_fake_grid_path = None
 
     # Load training set.
     if rank == 0:
@@ -588,6 +589,16 @@ def training_loop(
                 images, os.path.join(run_dir, f"fakes{cur_nimg//1000:06d}.png"), drange=[-1, 1], grid_size=grid_size
             )
 
+            # Remove previous best fake image if needed
+            if is_best_so_far and not save_all_snaps:
+                if best_fake_grid_path is not None:
+                    try:
+                        os.remove(best_fake_grid_path + ".png")
+                        os.remove(best_fake_grid_path + ".raw")
+                    except OSError:
+                        pass
+                best_fake_grid_path = os.path.join(run_dir, f"fakes{cur_nimg//1000:06d}")
+
         if (
             network_snapshot_ticks is not None
             and (cur_tick % network_snapshot_ticks == 0 or done)
@@ -609,7 +620,7 @@ def training_loop(
             # Remove previous best snapshot if needed
             snapshot_pkl = os.path.join(run_dir, f"network-snapshot-{cur_nimg//1000:06d}.pkl")
             if rank == 0:
-                if is_best_so_far:
+                if is_best_so_far and not save_all_snaps:
                     if best_snapshot_pkl_path is not None:
                         try:
                             os.remove(best_snapshot_pkl_path)
