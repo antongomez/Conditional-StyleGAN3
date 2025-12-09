@@ -78,9 +78,9 @@ def save_image_grid(img, fname, drange, grid_size, save_rgb=True):
     img = np.asarray(img, dtype=np.float32)
 
     gw, gh = grid_size
-    _N, H, W, C = img.shape
-    img = img.reshape([gh, gw, H, W, C])
-    img = img.transpose(0, 2, 1, 3, 4)
+    _N, C, H, W = img.shape
+    img = img.reshape([gh, gw, C, H, W])
+    img = img.transpose(0, 3, 1, 4, 2)
     img = img.reshape([gh * H, gw * W, C])
 
     # Save a copy keeping the original range
