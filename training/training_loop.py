@@ -176,6 +176,8 @@ def training_loop(
     disc_on_gen=False,  # Whether to run the discriminator on generated images.
     save_all_snaps=True,  # Whether to save all snapshots or only the best one based on validation average accuracy.
     autoencoder_kimg=0,  # Number of kimg to train the autoencoder for at the beginning of training.
+    autoencoder_patience=0,  # Number of ticks to wait for improvement before stopping the autoencoder training.
+    autoencoder_min_delta=0.0,  # Minimum change in validation loss to be considered an improvement for early stopping of the autoencoder.
 ):
     # Initialize.
     start_time = time.time()
@@ -193,6 +195,14 @@ def training_loop(
     best_val_avg_acc_tick = 0
     best_snapshot_pkl_path = None
     best_fake_grid_path = None
+
+    # Initialize autoencoder early stopping variables
+    best_ae_val_loss = float("inf")
+    patience_counter = 0
+
+    # We have two ways of specifying a parameter initialization through an AE: setting a
+    # fixed number of kimg to train or using early stopping based on validation AE loss
+    autoencoder_training_flag = (autoencoder_kimg > 0) or (autoencoder_patience > 0 and autoencoder_min_delta > 0.0)
 
     # Load training set.
     if rank == 0:
@@ -296,7 +306,7 @@ def training_loop(
         device=device, G=G, D=D, augment_pipe=augment_pipe, **loss_kwargs
     )  # subclass of training.loss.Loss
     phases = []
-    if autoencoder_kimg > 0:
+    if autoencoder_training_flag:
         G_opt = dnnlib.util.construct_class_by_name(params=G.parameters(), **G_opt_kwargs)
         D_opt = dnnlib.util.construct_class_by_name(params=D.parameters(), **D_opt_kwargs)
         phases += [dnnlib.EasyDict(name="AE", modules=[G, D], opts=[G_opt, D_opt], interval=1)]
@@ -325,8 +335,6 @@ def training_loop(
         if rank == 0:
             phase.start_event = torch.cuda.Event(enable_timing=True)
             phase.end_event = torch.cuda.Event(enable_timing=True)
-
-    print(f"Phases: {[phase.name for phase in phases]}")
 
     # Export sample images.
     grid_size = None
@@ -384,9 +392,7 @@ def training_loop(
     if progress_fn is not None:
         progress_fn(0, total_kimg)
     while True:
-
         # This consumes time during autoencoder training that can be avoided (we do not need them)
-
         # Fetch training data.
         with torch.autograd.profiler.record_function("data_fetch"):
             phase_real_img, phase_real_c = next(training_set_iterator)
@@ -416,9 +422,9 @@ def training_loop(
 
         # Execute training phases.
         for phase, phase_gen_z, phase_gen_c in zip(phases, all_gen_z, all_gen_c):
-            if phase.name != "AE" and autoencoder_nimg < autoencoder_kimg * 1000:
+            if phase.name != "AE" and autoencoder_training_flag:
                 continue
-            if phase.name == "AE" and autoencoder_nimg >= autoencoder_kimg * 1000:
+            if phase.name == "AE" and not autoencoder_training_flag:
                 continue
             if batch_idx % phase.interval != 0:
                 continue
@@ -475,8 +481,15 @@ def training_loop(
                 b_ema.copy_(b)
 
         # Update state.
-        if autoencoder_nimg < autoencoder_kimg * 1000:
+        if autoencoder_training_flag:
             autoencoder_nimg += batch_size
+            # Check if we need to disable autoencoder training flag because we have reached the specified number of kimg
+            if (autoencoder_kimg > 0) and (autoencoder_nimg >= autoencoder_kimg * 1000):
+                autoencoder_training_flag = False
+                if rank == 0:
+                    print(
+                        f"Finished autoencoder training at {autoencoder_nimg / 1000:.1f} kimg out of {autoencoder_kimg} kimg."
+                    )
         cur_nimg += batch_size
         batch_idx += 1
 
@@ -498,6 +511,7 @@ def training_loop(
         fields = []
         fields += [f"tick {training_stats.report0('Progress/tick', cur_tick):<5d}"]
         fields += [f"kimg {training_stats.report0('Progress/kimg', cur_nimg / 1e3):<8.1f}"]
+        fields += [f"ae_kimg {training_stats.report0('Progress/autoencoder_kimg', autoencoder_nimg / 1e3):<8.1f}"]
         fields += [
             f"time {dnnlib.util.format_time(training_stats.report0('Timing/total_sec', tick_end_time - start_time)):<12s}"
         ]
@@ -558,6 +572,19 @@ def training_loop(
             training_stats.report0("Timing/" + phase.name, value)
         stats_collector.update()
         stats_dict = stats_collector.as_dict()
+
+        # Early stopping for autoencoder
+        if (autoencoder_patience > 0 and autoencoder_min_delta > 0.0) and autoencoder_training_flag:
+            if "Loss/AE/val/loss" in stats_dict:
+                current_ae_val_loss = stats_dict["Loss/AE/val/loss"].mean
+                if current_ae_val_loss < best_ae_val_loss - autoencoder_min_delta:
+                    best_ae_val_loss = current_ae_val_loss
+                    patience_counter = 0
+                else:
+                    patience_counter += 1
+
+                if patience_counter >= autoencoder_patience:
+                    autoencoder_training_flag = False
 
         # Update best validation average accuracy
         if loss_kwargs.class_weight > 0 and (done or cur_tick % image_snapshot_ticks == 0):

@@ -165,6 +165,8 @@ def parse_comma_separated_list(s):
 @click.option('--disc-on-gen',  help='Run discriminator on generated images', metavar='BOOL',   type=bool, default=False, show_default=True)
 @click.option('--use-label-map',help='Use label map for non-consecutive integer labels', metavar='BOOL', type=bool, default=False, show_default=True)
 @click.option('--autoen-kimg',  help='Autoencoder pretraining duration', metavar='KIMG',        type=click.IntRange(min=0), default=0, show_default=True)
+@click.option('--autoen-patience',  help='Autoencoder early stopping patience in ticks', metavar='INT',     type=click.IntRange(min=0), default=0, show_default=True)
+@click.option('--autoen-min-delta', help='Autoencoder early stopping min delta',         metavar='FLOAT',   type=click.FloatRange(min=0), default=0.0, show_default=True)
 
 # Memory save arguments
 @click.option('--save-all-snaps',help='Save all snapshots during training', metavar='BOOL', type=bool, default=False, show_default=True)
@@ -266,11 +268,10 @@ def main(**kwargs):
     c.loss_kwargs.class_weight = opts.cls_weight
     c.uniform_class_labels = opts.uniform_class 
     c.disc_on_gen = opts.disc_on_gen
-    c.autoencoder_kimg = opts.autoen_kimg
-
-    # Memory save option
-    c.save_all_snaps = opts.save_all_snaps
-
+    c.autoencoder_kimg = opts.autoen_kimg    
+    c.autoencoder_patience = opts.autoen_patience
+    c.autoencoder_min_delta = opts.autoen_min_delta
+    
     # Memory save option
     c.save_all_snaps = opts.save_all_snaps
 
@@ -283,6 +284,8 @@ def main(**kwargs):
         raise click.ClickException('--batch-gpu cannot be smaller than --mbstd')
     if any(not metric_main.is_valid_metric(metric) for metric in c.metrics):
         raise click.ClickException('\n'.join(['--metrics can only contain the following values:'] + metric_main.list_valid_metrics()))
+    if (opts.autoen_patience > 0) != (opts.autoen_min_delta > 0):
+        raise click.ClickException('--autoen-patience and --autoen-min-delta must be both greater than 0 to enable early stopping, or both 0 to disable it')
 
     # Base configuration.
     c.ema_kimg = c.batch_size * 10 / 32
