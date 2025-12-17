@@ -41,6 +41,7 @@ def extract_metrics(jsonl_data, class_labels):
         "Loss/r1_penalty",
         "Loss/D/reg",
         "Loss/AE/loss",
+        "Loss/AE/val/loss",
         "Progress/tick",
         "Progress/kimg",
         "Timing/total_sec",
@@ -170,7 +171,6 @@ def summarize_training_options(json_path):
         config = json.load(f)
 
     # Extract relevant configuration parameters
-    label_map = config.get("label_map", False)
     class_weight = config.get("loss_kwargs", {}).get("class_weight")
     num_gpus = config.get("num_gpus")
     batch_size = config.get("batch_size")
@@ -665,6 +665,9 @@ def compute_adversarial_starting_tick(training_options_path):
         warnings.warn("Warning: 'autoencoder_kimg' not found in training options.", UserWarning)
         return 0
 
+    # Number of batches between ticks: the smallest integer greater than or equal to (kimg_per_tick * 1000) / batch_size
     batches_per_tick = math.ceil(training_options.get("kimg_per_tick") * 1000 / batch_size)
-    adversarial_starting_tick = math.ceil((autoencoder_kimg * 1000 - batch_size) / (batches_per_tick * 8))
+    # Tick at which adversarial training starts (solve n as a float in the next equation): 
+    #       batch + n * batches_per_tick * batch_size = autoencoder_kimg * 1000
+    adversarial_starting_tick = math.ceil((autoencoder_kimg * 1000 - batch_size) / (batches_per_tick * batch_size))
     return adversarial_starting_tick
