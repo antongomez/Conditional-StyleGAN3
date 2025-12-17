@@ -1,6 +1,5 @@
 import json
 import math
-import os
 import warnings
 
 import matplotlib.pyplot as plt
@@ -44,6 +43,7 @@ def extract_metrics(jsonl_data, class_labels):
         "Loss/AE/val/loss",
         "Progress/tick",
         "Progress/kimg",
+        "Progress/autoencoder_kimg",
         "Timing/total_sec",
         "Timing/sec_per_tick",
         "Timing/sec_per_kimg",
@@ -138,6 +138,7 @@ def summarize_training_stats(data, exclude_first_tick=True, display_hour_format=
     # Extract metrics
     total_kimg = data["Progress/kimg"][-1]
     total_ticks = data["Progress/tick"][-1]
+    total_ae_kimg = data["Progress/autoencoder_kimg"][-1]
     total_time_sec = data["Timing/total_sec"][-1]
     mean_sec_per_tick = np.mean(data["Timing/sec_per_tick"][first_index:])
     std_sec_per_tick = np.std(data["Timing/sec_per_tick"][first_index:])
@@ -159,8 +160,13 @@ def summarize_training_stats(data, exclude_first_tick=True, display_hour_format=
     mean_kimg_time = format_time(mean_sec_per_kimg)
     std_kimg_time = format_time(std_sec_per_kimg)
 
+    # Ensure AE_kimg is not None for compatibility with previous training runs
+    if total_ae_kimg is None:
+        total_ae_kimg = 0.0
+
     # Display results
     print(f"📊 Total kimg: {round(total_kimg, 3)}")
+    print(f"🖼️ Total autoencoder kimg: {round(total_ae_kimg, 3)}")
     print(f"📈 Total ticks: {int(total_ticks)}")
     print(f"⏱️ Mean time per tick: {mean_tick_time} (std: {std_tick_time})")
     print(f"⏳ Mean time per kimg: {mean_kimg_time} (std: {std_kimg_time})")
@@ -177,6 +183,8 @@ def summarize_training_options(json_path):
     uniform_class_labels = config.get("uniform_class_labels")
     disc_on_gen = config.get("disc_on_gen")
     autoencoder_kimg = config.get("autoencoder_kimg")
+    autoencoder_patience = config.get("autoencoder_patience", None)
+    autoencoder_min_delta = config.get("autoencoder_min_delta", None)
     ada_target_present = "ada_target" in config
     ada_target_value = config.get("ada_target") if ada_target_present else None
 
@@ -188,10 +196,14 @@ def summarize_training_options(json_path):
     print(f"🎯 Uniform class labels: {uniform_class_labels}")
     print(f"🧪 Discriminator on generated images: {disc_on_gen}")
     print(f"🖼️ Autoencoder kimg: {autoencoder_kimg}")
+    if autoencoder_patience is not None:
+        print(f"⏳ Autoencoder patience: {autoencoder_patience}")
+    if autoencoder_min_delta is not None:
+        print(f"🔍 Autoencoder min delta: {autoencoder_min_delta}")
     if ada_target_present:
-        print(f"🎛️  ADA target present ✅ → Value: {ada_target_value}")
+        print(f"🎛️ ADA target present ✅ → Value: {ada_target_value}")
     else:
-        print("🎛️  ADA target present ❌")
+        print("🎛️ ADA target present ❌")
 
 
 def extract_confusion_matrix(jsonl_data, class_labels, progress_tick=None, data_type="real"):
@@ -225,10 +237,18 @@ def plot_metric(
 ):
     """Plots specific metrics against the x-axis."""
     plt.figure(figsize=(10, 5))
-    start_idx = data["Progress/tick"].index(float(start_tick)) if start_tick is not None else 0
-    end_idx = (
-        data["Progress/tick"].index(float(end_tick)) + 1 if end_tick is not None else int(data["Progress/tick"][-1]) + 1
-    )
+    try:
+        start_idx = data["Progress/tick"].index(float(start_tick)) if start_tick is not None else 0
+        end_idx = (
+            data["Progress/tick"].index(float(end_tick)) + 1
+            if end_tick is not None
+            else int(data["Progress/tick"][-1]) + 1
+        )
+    except ValueError:
+        start_idx = 0
+        end_idx = len(data[x_axis])
+        warnings.warn("Specified start_tick or end_tick not found in data. Plotting full range.", UserWarning)
+
     for i, metric in enumerate(metrics):
         if metric in data:
             color = colors[i] if colors and i < len(colors) else None
@@ -382,10 +402,17 @@ def plot_accuracies(
         raise ValueError("Invalid dataset. Choose from 'train', 'val', or 'both'.")
 
     # Determine indices for the specified tick range
-    start_idx = data["Progress/tick"].index(float(start_tick)) if start_tick is not None else 0
-    end_idx = (
-        data["Progress/tick"].index(float(end_tick)) + 1 if end_tick is not None else int(data["Progress/tick"][-1]) + 1
-    )
+    try:
+        start_idx = data["Progress/tick"].index(float(start_tick)) if start_tick is not None else 0
+        end_idx = (
+            data["Progress/tick"].index(float(end_tick)) + 1
+            if end_tick is not None
+            else int(data["Progress/tick"][-1]) + 1
+        )
+    except ValueError:
+        start_idx = 0
+        end_idx = len(data["Progress/kimg"])
+        warnings.warn("Specified start_tick or end_tick not found in data. Plotting full range.", UserWarning)
 
     # Extract Progress/kimg for the specified range
     progress_kimg = data["Progress/kimg"][start_idx:end_idx]
@@ -654,12 +681,17 @@ def get_effective_autoencoder_kimg(training_options_path):
     return math.ceil(autoencoder_kimg * 1000 / batch_size * batch_size)
 
 
-def compute_adversarial_starting_tick(training_options_path):
+def compute_adversarial_starting_tick(training_options_path, autoencoder_kimg_progress_values=None):
     with open(training_options_path, "r") as f:
         training_options = json.load(f)
 
     batch_size = training_options.get("batch_size")
-    autoencoder_kimg = training_options.get("autoencoder_kimg", None)
+    if autoencoder_kimg_progress_values is None:
+        # Asume the number of kimg used for autoencoder training is the one in training options
+        autoencoder_kimg = training_options.get("autoencoder_kimg", None)
+    else:
+        # Last value should be the final number of kimg used for autoencoder training
+        autoencoder_kimg = autoencoder_kimg_progress_values[-1]
 
     if autoencoder_kimg is None:
         warnings.warn("Warning: 'autoencoder_kimg' not found in training options.", UserWarning)
@@ -667,7 +699,7 @@ def compute_adversarial_starting_tick(training_options_path):
 
     # Number of batches between ticks: the smallest integer greater than or equal to (kimg_per_tick * 1000) / batch_size
     batches_per_tick = math.ceil(training_options.get("kimg_per_tick") * 1000 / batch_size)
-    # Tick at which adversarial training starts (solve n as a float in the next equation): 
+    # Tick at which adversarial training starts (solve n as a float in the next equation):
     #       batch + n * batches_per_tick * batch_size = autoencoder_kimg * 1000
     adversarial_starting_tick = math.ceil((autoencoder_kimg * 1000 - batch_size) / (batches_per_tick * batch_size))
     return adversarial_starting_tick
