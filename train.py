@@ -169,10 +169,8 @@ def parse_comma_separated_list(s):
 @click.option('--autoen-min-delta', help='Autoencoder early stopping min delta',         metavar='FLOAT',   type=click.FloatRange(min=0), default=0.0, show_default=True)
 
 # Memory save arguments
-@click.option('--save-all-snaps',help='Save all snapshots during training', metavar='BOOL', type=bool, default=False, show_default=True)
-
-# Memory save arguments
-@click.option('--save-all-snaps',help='Save all snapshots during training', metavar='BOOL', type=bool, default=False, show_default=True)
+@click.option('--save-all-snaps',help='Save all snapshots during training',        metavar='BOOL',  type=bool, default=False, show_default=True)
+@click.option('--save-all-fakes',help='Save all fake image grids during training', metavar='BOOL',  type=bool, default=False, show_default=True)
 
 # Misc hyperparameters.
 @click.option('--p',            help='Probability for --aug=fixed', metavar='FLOAT',            type=click.FloatRange(min=0, max=1), default=0.2, show_default=True)
@@ -273,6 +271,7 @@ def main(**kwargs):
     c.autoencoder_min_delta = opts.autoen_min_delta
     
     # Memory save option
+    c.save_all_fakes = opts.save_all_fakes
     c.save_all_snaps = opts.save_all_snaps
 
     # Sanity checks.

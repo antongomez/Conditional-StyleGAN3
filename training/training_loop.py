@@ -175,6 +175,7 @@ def training_loop(
     uniform_class_labels=False,  # Use uniform class labels for generated images or use the training set distribution?
     disc_on_gen=False,  # Whether to run the discriminator on generated images.
     save_all_snaps=True,  # Whether to save all snapshots or only the best one based on validation average accuracy.
+    save_all_fakes=True,  # Whether to save all fake image grids or only the best one based on validation average accuracy.
     autoencoder_kimg=0,  # Number of kimg to train the autoencoder for at the beginning of training.
     autoencoder_patience=0,  # Number of ticks to wait for improvement before stopping the autoencoder training.
     autoencoder_min_delta=0.0,  # Minimum change in validation loss to be considered an improvement for early stopping of the autoencoder.
@@ -609,7 +610,7 @@ def training_loop(
             (rank == 0)
             and (image_snapshot_ticks is not None)
             and (done or cur_tick % image_snapshot_ticks == 0)
-            and (save_all_snaps or is_best_so_far or done)
+            and (save_all_fakes or is_best_so_far or done)
         ):
             images = torch.cat([G_ema(z=z, c=c, noise_mode="const").cpu() for z, c in zip(grid_z, grid_c)]).numpy()
             save_image_grid(
@@ -617,7 +618,7 @@ def training_loop(
             )
 
             # Remove previous best fake image if needed
-            if is_best_so_far and not save_all_snaps:
+            if is_best_so_far and not save_all_fakes:
                 if best_fake_grid_path is not None:
                     try:
                         os.remove(best_fake_grid_path + ".png")
