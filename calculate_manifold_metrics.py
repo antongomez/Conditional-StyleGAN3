@@ -61,6 +61,63 @@ def ensure_reproducibility(seed):
         torch.backends.cudnn.benchmark = False
 
 
+def compute_dataset_stats(dataset, batch_size=256, num_workers=4, device="cpu", desc="Computing stats"):
+    """
+    Computes the mean and standard deviation of a dataset in a single pass
+    using a DataLoader for efficiency.
+    """
+    loader = DataLoader(dataset, batch_size=batch_size, shuffle=False, num_workers=num_workers, pin_memory=True)
+
+    sum_x = 0.0
+    sum_sq_x = 0.0
+    total_count = 0
+
+    # Iterate once to compute sum and sum of squares
+    for batch, _ in tqdm(loader, desc=desc):
+        # Move to device for faster computation if available
+        # Normalize to [-1, 1] as per the original logic
+        batch = batch.to(device, dtype=torch.float32) / 127.5 - 1.0
+
+        # We want the global mean/std of all pixels
+        sum_x += torch.sum(batch)
+        sum_sq_x += torch.sum(batch**2)
+        total_count += batch.numel()
+
+    # Move back to CPU for scalar calc
+    sum_x = float(sum_x)
+    sum_sq_x = float(sum_sq_x)
+
+    mean = sum_x / total_count
+    # Var = E[X^2] - (E[X])^2
+    var = (sum_sq_x / total_count) - (mean**2)
+    std = np.sqrt(max(0, var))  # max(0) to avoid negative due to float precision
+
+    return mean, std
+
+
+def apply_distribution_matching(pool, target_stats, pool_stats):
+    """
+    Normalizes the synthetic pool to match the target (real) dataset statistics.
+    Logic based on original implementation:
+    new_val = (old_val - shift) * scale_factor
+    """
+    target_mean, target_std = target_stats
+    pool_mean, pool_std = pool_stats
+
+    scale_factor = target_std / (pool_std + 1e-8)
+    shift = pool_mean - target_mean
+
+    print("-" * 20 + f"\nShift: {shift:.6f}")
+    print(f"Scale factor: {scale_factor:.6f}")
+
+    new_pool = {}
+    for class_idx, images in pool.items():
+        # Apply transformation
+        new_pool[class_idx] = (images - shift) * scale_factor
+
+    return new_pool
+
+
 def get_train_samples(dataset, sampling, num_workers=3):
 
     raw_labels = dataset._get_raw_labels()
@@ -265,48 +322,39 @@ for i, class_idx in enumerate(class_labels):
     pool[class_idx] = samples[i * args.pool_size : (i + 1) * args.pool_size, :, :, :]
 
 if args.show_pool_stats or args.synthetic_norm:
-    # Compute pools stats, i.e., mean and std of the pool
+    # Compute pools stats
     pool_mean = samples.mean().item()
-    pool_var = samples.var().item()
-    pool_std = np.sqrt(pool_var)
+    pool_std = samples.std().item()
+
     print("-" * 20 + "\nPool stats:")
     print(f"Mean: {pool_mean:.6f}")
     print(f"Std: {pool_std:.6f}")
 
-    # Compute real dataset stats, i.e., mean and std of the real dataset
-    means = {"train": 0, "test": 0}
-    vars = {"train": 0, "test": 0}
-    stds = {"train": 0, "test": 0}
-
+    # Compute real dataset stats efficiently
+    # We use num_workers for parallel loading and calculate in one pass
+    real_stats = {}
     for split in ["train", "test"]:
-        for image, label in datasets[split]:
-            image = image.astype(np.float32) / 127.5 - 1  # Normalize image to [-1, 1]
-            means[split] += image.mean()
-        means[split] = means[split] / len(datasets[split])
-        for image, label in datasets[split]:
-            image = image.astype(np.float32) / 127.5 - 1  # Normalize image to [-1, 1]
-            vars[split] += (image.mean() - means[split]) ** 2
-        vars[split] = vars[split] / len(datasets[split])
-        stds[split] = np.sqrt(vars[split])
-        print("-" * 20 + f"\n{split.capitalize()} set stats:")
-        print(f"Mean: {means[split]:.6f}")
-        print(f"Std: {stds[split]:.6f}")
+        mean, std = compute_dataset_stats(
+            datasets[split],
+            batch_size=args.batch_size_load,
+            device=device,
+            desc=f"Stats ({split})",
+        )
+        real_stats[split] = (mean, std)
 
-    scale_factor = stds["train"] / pool_std
-    shift = pool_mean - means["train"]
-    print("-" * 20 + f"\nShift: {shift:.6f}")
-    print(f"Scale factor: {scale_factor:.6f}")
+        print("-" * 20 + f"\n{split.capitalize()} set stats:")
+        print(f"Mean: {mean:.6f}")
+        print(f"Std: {std:.6f}")
 
     if args.synthetic_norm:
-        # Normalize the image pool
-        for class_idx in pool.keys():
-            pool[class_idx] = (pool[class_idx] - shift) * scale_factor
+        # Normalize the image pool using Train stats
+        pool = apply_distribution_matching(pool, target_stats=real_stats["train"], pool_stats=(pool_mean, pool_std))
 
-        # Concatenate all samples to compute the new stats
+        # Re-compute stats for verification
         normalized_samples = torch.cat(list(pool.values()), dim=0)
         pool_mean = normalized_samples.mean().item()
-        pool_var = normalized_samples.var().item()
-        pool_std = np.sqrt(pool_var)
+        pool_std = normalized_samples.std().item()
+
         print("Pool NORMALIZED stats")
         print("Pool stats:")
         print(f"Mean: {pool_mean:.6f}")
@@ -334,10 +382,7 @@ if num_gpus > 1:
 
 print("-" * 20)
 
-sampling_fid = args.pool_size // 2
-assert (
-    sampling_fid <= args.pool_size
-), f"Sampling ({sampling_fid}) must be less or equal than pool size ({args.pool_size})"
+sampling_fid = args.pool_size
 
 experiments_fid = 5
 
