@@ -191,6 +191,7 @@ class ImageFolderDataset(Dataset):
     ):
         self._path = path
         self._zipfile = None
+        self._zipfile_pid = None
 
         if os.path.isdir(self._path):
             self._type = "dir"
@@ -226,8 +227,12 @@ class ImageFolderDataset(Dataset):
 
     def _get_zipfile(self):
         assert self._type == "zip"
+        if self._zipfile is not None and self._zipfile_pid != os.getpid():
+            self._zipfile = None
+
         if self._zipfile is None:
             self._zipfile = zipfile.ZipFile(self._path)
+            self._zipfile_pid = os.getpid()
         return self._zipfile
 
     def _open_file(self, fname):
