@@ -391,7 +391,7 @@ def main():
     # Initialize dataset
     test_set_kwargs, _ = init_dataset_kwargs(data=args.data_zip)
     test_set_kwargs.use_label_map = True
-    data_loader_kwargs = dnnlib.EasyDict(pin_memory=True, prefetch_factor=2, num_workers=0)
+    data_loader_kwargs = dnnlib.EasyDict(pin_memory=True, prefetch_factor=2, num_workers=3)
 
     # Build test dataset and dataloader
     test_dataset, test_dataloader = build_dataset(

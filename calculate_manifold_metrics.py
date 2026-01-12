@@ -152,9 +152,9 @@ parser.add_argument("--input-path",         help="Path to the input multispectra
 parser.add_argument("--filename",           help="Base filename (without extension)",                                           type=str, required=True)
 parser.add_argument("--dataset-seed",       help="Random seed for dataset splitting",                                           type=int, default=0)
 
-parser.add_argument("--batch-size_load",    help="Batch size for data loaders",                                                 type=int, default=256)
-parser.add_argument("--batch-size_gen",     help="Batch size for image generation",                                             type=int, default=64)
-parser.add_argument("--batch-size-metrics", help="Batch size for metric calculation",                                           type=int, default=64)
+parser.add_argument("--batch-size_load",    help="Batch size for data loaders",                                                 type=int, default=512)
+parser.add_argument("--batch-size_gen",     help="Batch size for image generation",                                             type=int, default=128)
+parser.add_argument("--batch-size-metrics", help="Batch size for metric calculation",                                           type=int, default=512)
 
 parser.add_argument("--synthetic-norm",     help="Wheter to normalize the synthetic images or not",                             action="store_true", default=False)
 parser.add_argument("--show-pool-stats",    help="Wheter to show the pool statistics or not",                                   action="store_true", default=False)
