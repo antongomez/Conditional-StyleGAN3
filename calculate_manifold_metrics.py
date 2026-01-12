@@ -130,7 +130,6 @@ def get_synthetic_samples(pool, classes, num_samples):
 
 parser = argparse.ArgumentParser(description="Hyperspectral Image Classification")
 
-# Add arguments
 # fmt: off
 parser.add_argument("--network-pkl",        help="Model to use",                                                                type=str, required=True)
 parser.add_argument("--patch-size",         help="Patch size",                                                                  type=int, default=32)
@@ -143,6 +142,7 @@ parser.add_argument("--filename",           help="Base filename (without extensi
 parser.add_argument("--dataset-seed",       help="Random seed for dataset splitting",                                           type=int, default=0)
 parser.add_argument("--batch-size",         help="Batch size for data loaders",                                                 type=int, default=256)
 parser.add_argument("--synthetic-norm",     help="Wheter to normalize the synthetic images or not",                             action="store_true", default=False)
+parser.add_argument("--show-pool-stats",    help="Wheter to show the pool statistics or not",                                   action="store_true", default=False)
 # fmt: on
 
 args = parser.parse_args()
@@ -231,15 +231,15 @@ pool = dict()
 for i, class_idx in enumerate(class_labels):
     pool[class_idx] = samples[i * args.pool_size : (i + 1) * args.pool_size, :, :, :]
 
-# Compute pools stats, i.e., mean and std of the pool
-pool_mean = samples.mean().item()
-pool_var = samples.var().item()
-pool_std = np.sqrt(pool_var)
-print("-" * 20 + "\nPool stats:")
-print(f"Mean: {pool_mean:.6f}")
-print(f"Std: {pool_std:.6f}")
+if args.show_pool_stats or args.synthetic_norm:
+    # Compute pools stats, i.e., mean and std of the pool
+    pool_mean = samples.mean().item()
+    pool_var = samples.var().item()
+    pool_std = np.sqrt(pool_var)
+    print("-" * 20 + "\nPool stats:")
+    print(f"Mean: {pool_mean:.6f}")
+    print(f"Std: {pool_std:.6f}")
 
-if True:
     # Compute real dataset stats, i.e., mean and std of the real dataset
     means = {"train": 0, "test": 0}
     vars = {"train": 0, "test": 0}
@@ -290,6 +290,11 @@ judge_model.load_state_dict(torch.load(args.fid_model_path, map_location=device)
 judge_model.to(device)
 judge_model.eval()
 
+num_gpus = torch.cuda.device_count()
+if num_gpus > 1:
+    print(f"Using {num_gpus} GPUs for metric calculation.")
+    judge_model = torch.nn.DataParallel(judge_model)
+
 ##########################################################################################
 # ------------------------------------ COMPUTE FID ------------------------------------- #
 ##########################################################################################
@@ -313,7 +318,7 @@ for i in range(experiments_fid):
     examples_1 = get_train_samples(datasets["train"], sampling_fid, i, experiments_fid)
     examples_2 = get_synthetic_samples(pool, class_labels, sampling_fid)
 
-    fid_results.append(calculate_fid(judge_model, examples_1, examples_2, device=device))
+    fid_results.append(calculate_fid(judge_model, examples_1, examples_2, batch_size=args.batch_size, device=device))
     fid_times.append(time.time() - start)
 
 
@@ -348,7 +353,9 @@ for i in range(experiments_pr):
     features_1 = []
     features_2 = []
 
-    precision, recall = compute_precision_recall(judge_model, examples_1, examples_2, device=device)
+    precision, recall = compute_precision_recall(
+        judge_model, examples_1, examples_2, batch_size=args.batch_size, device=device, num_gpus=num_gpus
+    )
 
     precision_results.append(precision)
     recall_results.append(recall)
