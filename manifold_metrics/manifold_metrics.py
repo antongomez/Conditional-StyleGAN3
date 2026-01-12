@@ -6,7 +6,26 @@ import scipy
 import torch
 
 
-def calculate_fid(model, examples_1, examples_2, device="cpu"):
+def get_features(model, examples, batch_size=128, device="cpu"):
+    """Helper to extract features in batches."""
+    model.eval()
+    features_list = []
+
+    if isinstance(examples, list):
+        examples = torch.stack(examples)
+
+    num_samples = len(examples)
+
+    with torch.no_grad():
+        for i in range(0, num_samples, batch_size):
+            batch = examples[i : i + batch_size].to(device)
+            _, features = model(batch)
+            features_list.append(features.cpu())
+
+    return torch.cat(features_list, dim=0).numpy()
+
+
+def calculate_fid(model, examples_1, examples_2, batch_size=128, device="cpu"):
     """Calculates the Fréchet Inception Distance (FID) between two sets of examples.
 
     The FID is a measure of similarity between two sets of images. It is calculated
@@ -17,6 +36,7 @@ def calculate_fid(model, examples_1, examples_2, device="cpu"):
         model (torch.nn.Module): The feature extractor network (e.g., InceptionV3).
         examples_1 (torch.Tensor or list): A batch of images from the first set (e.g., real images).
         examples_2 (torch.Tensor or list): A batch of images from the second set (e.g., generated images).
+        batch_size (int, optional): The batch size for feature extraction. Defaults to 32.
         device (str, optional): The device to use for computation ('cpu' or 'cuda'). Defaults to "cpu".
 
     Raises:
@@ -27,28 +47,12 @@ def calculate_fid(model, examples_1, examples_2, device="cpu"):
         float: The calculated FID score.
     """
 
-    act1 = None
-    act2 = None
-
     model = model.to(device)
 
-    if isinstance(examples_1, list):
-        examples_1 = torch.stack(examples_1)
-    if isinstance(examples_2, list):
-        examples_2 = torch.stack(examples_2)
+    act1 = get_features(model, examples_1, batch_size, device)
+    act2 = get_features(model, examples_2, batch_size, device)
 
-    examples_1 = examples_1.to(device)
-    examples_2 = examples_2.to(device)
-
-    with torch.no_grad():
-        _, features = model(examples_1)
-        act1 = features.cpu().numpy()
-        del examples_1, features, _
-        torch.cuda.empty_cache()
-
-        _, features = model(examples_2)
-        act2 = features.cpu().numpy()
-        del examples_2, features, _
+    torch.cuda.empty_cache()
 
     mu1, sigma1 = np.mean(act1, axis=0), np.cov(act1, rowvar=False)
     mu2, sigma2 = np.mean(act2, axis=0), np.cov(act2, rowvar=False)
@@ -132,14 +136,27 @@ class DistanceBlock:
         Returns:
             torch.Tensor: A tensor containing the pairwise distances.
         """
-        U_split = torch.split(U, U.shape[0] // self.num_gpus)
-        V_split = torch.split(V, V.shape[0] // self.num_gpus)
+        # We split V (columns) across GPUs, and replicate U (rows).
+        # This computes the distance matrix in vertical strips and concatenates them horizontally.
+        V_split = torch.chunk(V, self.num_gpus)
 
         distances_split = []
-        for i in range(self.num_gpus):
-            with torch.cuda.device(i):
-                distances_split.append(batch_pairwise_distances(U_split[i].cuda(), V_split[i].cuda()).cpu())
+        for i in range(len(V_split)):
+            # Determine device for this chunk
+            device = torch.device(f"cuda:{i}")
 
+            # Move U to device (replicated)
+            U_gpu = U.to(device)
+            # Move V chunk to device
+            V_gpu = V_split[i].to(device)
+
+            # Compute distances on this device
+            dist = batch_pairwise_distances(U_gpu, V_gpu).cpu()
+            distances_split.append(dist)
+
+            del U_gpu, V_gpu
+
+        torch.cuda.empty_cache()
         return torch.cat(distances_split, dim=1)
 
 
@@ -316,32 +333,18 @@ def knn_precision_recall_features(
     return state
 
 
-def compute_precision_recall(judge_model, examples_1, examples_2, device="cpu"):
+def compute_precision_recall(judge_model, examples_1, examples_2, batch_size=128, device="cpu", num_gpus=1):
     """Computes k-NN precision and recall between two sets of examples using a judge model."""
 
     judge_model = judge_model.to(device)
 
-    if isinstance(examples_1, list):
-        examples_1 = torch.stack(examples_1)
-    if isinstance(examples_2, list):
-        examples_2 = torch.stack(examples_2)
+    # Extract features using the judge model with batching
+    features_1 = get_features(judge_model, examples_1, batch_size, device)
+    features_2 = get_features(judge_model, examples_2, batch_size, device)
 
-    examples_1 = examples_1.to(device)
-    examples_2 = examples_2.to(device)
-
-    # Extract features using the judge model
-    features_1 = []
-    features_2 = []
-
-    # Disable gradient calculation for inference
-    with torch.no_grad():
-        _, features_1 = judge_model(examples_1)
-        features_1 = features_1.cpu().numpy()
-
-        _, features_2 = judge_model(examples_2)
-        features_2 = features_2.cpu().numpy()
-
-    state = knn_precision_recall_features(features_1, features_2, row_batch_size=10000, col_batch_size=50000)
+    state = knn_precision_recall_features(
+        features_1, features_2, row_batch_size=10000, col_batch_size=50000, num_gpus=num_gpus
+    )
     precision = state["precision"][0]
     recall = state["recall"][0]
 
