@@ -147,6 +147,7 @@ parser.add_argument("--batch-size-metrics", help="Batch size for metric calculat
 
 parser.add_argument("--synthetic-norm",     help="Wheter to normalize the synthetic images or not",                             action="store_true", default=False)
 parser.add_argument("--show-pool-stats",    help="Wheter to show the pool statistics or not",                                   action="store_true", default=False)
+parser.add_argument("--num-gpus",           help="Number of GPUs to use (default: all available)",                              type=int, default=None)
 # fmt: on
 
 args = parser.parse_args()
@@ -156,6 +157,19 @@ cuda = device.type == "cuda"
 
 SEED = 42
 ensure_reproducibility(seed=SEED)
+
+if args.num_gpus is None:
+    num_gpus = torch.cuda.device_count()
+else:
+    num_gpus = args.num_gpus
+
+if num_gpus > torch.cuda.device_count():
+    print(
+        f"Warning: Requested {num_gpus} GPUs, but only {torch.cuda.device_count()} are available. Using all available GPUs."
+    )
+    num_gpus = torch.cuda.device_count()
+else:
+    print(f"Using {num_gpus} GPUs for calculations.")
 
 
 ##########################################################################################
@@ -209,6 +223,7 @@ _ = generate_images.callback(
     no_rgb=False,
     no_int8=False,
     batch_size=args.batch_size_gen,
+    num_gpus=num_gpus,
 )
 
 ##########################################################################################
@@ -230,6 +245,7 @@ samples = generate_images.callback(
     no_rgb=True,
     no_int8=True,
     batch_size=args.batch_size_gen,
+    num_gpus=num_gpus,
 )
 
 # Save the samples in a dictionary, one key for each class
@@ -296,7 +312,6 @@ judge_model.load_state_dict(torch.load(args.fid_model_path, map_location=device)
 judge_model.to(device)
 judge_model.eval()
 
-num_gpus = torch.cuda.device_count()
 if num_gpus > 1:
     print(f"Using {num_gpus} GPUs for metric calculation.")
     judge_model = torch.nn.DataParallel(judge_model)
