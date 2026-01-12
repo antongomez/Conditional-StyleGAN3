@@ -140,7 +140,11 @@ parser.add_argument("--pool-size",          help="Pool size for the generated im
 parser.add_argument("--input-path",         help="Path to the input multispectral dataset",                                     type=str, default="./data")
 parser.add_argument("--filename",           help="Base filename (without extension)",                                           type=str, required=True)
 parser.add_argument("--dataset-seed",       help="Random seed for dataset splitting",                                           type=int, default=0)
-parser.add_argument("--batch-size",         help="Batch size for data loaders",                                                 type=int, default=256)
+
+parser.add_argument("--batch-size_load",    help="Batch size for data loaders",                                                 type=int, default=256)
+parser.add_argument("--batch-size_gen",     help="Batch size for image generation",                                             type=int, default=64)
+parser.add_argument("--batch-size-metrics", help="Batch size for metric calculation",                                           type=int, default=64)
+
 parser.add_argument("--synthetic-norm",     help="Wheter to normalize the synthetic images or not",                             action="store_true", default=False)
 parser.add_argument("--show-pool-stats",    help="Wheter to show the pool statistics or not",                                   action="store_true", default=False)
 # fmt: on
@@ -174,7 +178,7 @@ for split_key in ["train", "val", "test"]:
     datasets[split_key], _ = build_dataset(
         dataset_kwargs=dataset_kwargs,
         data_loader_kwargs=dnnlib.EasyDict(),
-        batch_size=args.batch_size,
+        batch_size=args.batch_size_load,
     )
 
 # {<index>: <label> - 1}; <index> between 0 and num_classes - 1; <label> true label in the dataset
@@ -204,6 +208,7 @@ _ = generate_images.callback(
     save_images=True,
     no_rgb=False,
     no_int8=False,
+    batch_size=args.batch_size_gen,
 )
 
 ##########################################################################################
@@ -224,6 +229,7 @@ samples = generate_images.callback(
     save_images=False,
     no_rgb=True,
     no_int8=True,
+    batch_size=args.batch_size_gen,
 )
 
 # Save the samples in a dictionary, one key for each class
@@ -318,7 +324,9 @@ for i in range(experiments_fid):
     examples_1 = get_train_samples(datasets["train"], sampling_fid, i, experiments_fid)
     examples_2 = get_synthetic_samples(pool, class_labels, sampling_fid)
 
-    fid_results.append(calculate_fid(judge_model, examples_1, examples_2, batch_size=args.batch_size, device=device))
+    fid_results.append(
+        calculate_fid(judge_model, examples_1, examples_2, batch_size=args.batch_size_metrics, device=device)
+    )
     fid_times.append(time.time() - start)
 
 
@@ -354,7 +362,7 @@ for i in range(experiments_pr):
     features_2 = []
 
     precision, recall = compute_precision_recall(
-        judge_model, examples_1, examples_2, batch_size=args.batch_size, device=device, num_gpus=num_gpus
+        judge_model, examples_1, examples_2, batch_size=args.batch_size_metrics, device=device, num_gpus=num_gpus
     )
 
     precision_results.append(precision)

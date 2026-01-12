@@ -175,6 +175,11 @@ def noise_to_images_multiclass(
     for i in range(len(classes_idx)):
         labels_all[i * num_images_per_class : (i + 1) * num_images_per_class, classes_idx[i]] = 1
 
+    # Check for multiple GPUs and wrap G if available
+    if torch.cuda.device_count() > 1:
+        print(f"Using {torch.cuda.device_count()} GPUs for image generation.")
+        G = torch.nn.DataParallel(G)
+
     # Generate images in batches
     imgs_list = []
     for i in tqdm(range(0, total_images, batch_size), desc="Generating images"):
@@ -277,7 +282,8 @@ def save_raw_image(filename: str, image: np.ndarray, drange: Tuple[float, float]
 @click.option("--outdir",                                       help="Where to save the output images",                 type=str,           required=True, metavar="DIR")
 @click.option("--save-images", "save_images",                   help="Wheter to save or not the images",                is_flag=True,       default=False, show_default=True)     
 @click.option("--no-rgb", "no_rgb",                             help="Avoid saving images in RGB format",               is_flag=True,       default=False, show_default=True) 
-@click.option("--no-int8", "no_int8",                           help="Avoid converting images to int8 format",          is_flag=True,       default=False, show_default=True) # fmt: on
+@click.option("--no-int8", "no_int8",                           help="Avoid converting images to int8 format",          is_flag=True,       default=False, show_default=True) 
+@click.option("--batch-size", "batch_size",                     help="Batch size for generation",                       type=int,           default=64, show_default=True) # fmt: on
 def generate_images(
     network_pkl: str,
     seeds: List[int],
@@ -292,6 +298,7 @@ def generate_images(
     save_images: bool,
     no_rgb: bool,
     no_int8:  bool,
+    batch_size: int,
 ):
     """Generate images using pretrained network pickle.
 
@@ -382,6 +389,7 @@ def generate_images(
             classes_idx=classes,
             device=device,
             num_images_per_class=num_images_per_class, 
+            batch_size=batch_size,
             to_int8=not no_int8,
         )
 
