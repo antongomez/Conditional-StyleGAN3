@@ -142,6 +142,7 @@ def noise_to_images_multiclass(
     num_images_per_class: int = 1,
     batch_size: int = 64,
     to_int8: bool = True,
+    num_gpus: Optional[int] = None,
 ):
     """Generate images from the generator using a random seed.
     Args:
@@ -156,6 +157,7 @@ def noise_to_images_multiclass(
         num_images_per_class: Number of images to generate per class.
         batch_size: Number of images to generate per batch (default: 64).
         to_int8: Whether to convert the output images to uint8 format.
+        num_gpus: Number of GPUs to use for generation.
     Returns:
         imgs: Generated image tensor.
     """
@@ -176,8 +178,10 @@ def noise_to_images_multiclass(
         labels_all[i * num_images_per_class : (i + 1) * num_images_per_class, classes_idx[i]] = 1
 
     # Check for multiple GPUs and wrap G if available
-    if torch.cuda.device_count() > 1:
-        print(f"Using {torch.cuda.device_count()} GPUs for image generation.")
+    if num_gpus is None:
+        num_gpus = torch.cuda.device_count()
+    if num_gpus > 1:
+        print(f"Using {num_gpus} GPUs for image generation.")
         G = torch.nn.DataParallel(G)
 
     # Generate images in batches
@@ -283,7 +287,9 @@ def save_raw_image(filename: str, image: np.ndarray, drange: Tuple[float, float]
 @click.option("--save-images", "save_images",                   help="Wheter to save or not the images",                is_flag=True,       default=False, show_default=True)     
 @click.option("--no-rgb", "no_rgb",                             help="Avoid saving images in RGB format",               is_flag=True,       default=False, show_default=True) 
 @click.option("--no-int8", "no_int8",                           help="Avoid converting images to int8 format",          is_flag=True,       default=False, show_default=True) 
-@click.option("--batch-size", "batch_size",                     help="Batch size for generation",                       type=int,           default=64, show_default=True) # fmt: on
+@click.option("--batch-size", "batch_size",                     help="Batch size for generation",                       type=int,           default=64, show_default=True) 
+@click.option("--num-gpus", "num_gpus",                         help="Number of GPUs to use for generation",            type=int,           default=None, show_default=True)
+# fmt: on
 def generate_images(
     network_pkl: str,
     seeds: List[int],
@@ -297,8 +303,9 @@ def generate_images(
     num_images_per_class: Optional[int],
     save_images: bool,
     no_rgb: bool,
-    no_int8:  bool,
+    no_int8: bool,
     batch_size: int,
+    num_gpus: Optional[int],
 ):
     """Generate images using pretrained network pickle.
 
@@ -354,7 +361,7 @@ def generate_images(
                 to_int8=not no_int8,
             )
             img = class_imgs[0]
-            images.append(img.clone()) # return a copy to avoid issues later on
+            images.append(img.clone())  # return a copy to avoid issues later on
 
             if save_images:
                 # To save the image, we need to convert it to uint8
@@ -370,7 +377,9 @@ def generate_images(
                     if not no_rgb:
                         PIL.Image.fromarray(img[:, :, [2, 1, 0]].numpy(), "RGB").save(f"{outdir}/seed{seed:04d}.png")
                     # Save as raw image with all channels
-                    save_raw_image(f"{outdir}/seed{seed:04d}.raw", img.numpy(), drange=(-1, 1) if not no_int8 else (0, 255))
+                    save_raw_image(
+                        f"{outdir}/seed{seed:04d}.raw", img.numpy(), drange=(-1, 1) if not no_int8 else (0, 255)
+                    )
                 else:
                     raise ValueError(f"Unexpected number of channels: {img.shape[-1]}")
 
@@ -388,9 +397,10 @@ def generate_images(
             rotate=rotate,
             classes_idx=classes,
             device=device,
-            num_images_per_class=num_images_per_class, 
+            num_images_per_class=num_images_per_class,
             batch_size=batch_size,
             to_int8=not no_int8,
+            num_gpus=num_gpus,
         )
 
         if save_images:
