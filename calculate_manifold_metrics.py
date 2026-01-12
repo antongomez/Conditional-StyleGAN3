@@ -30,6 +30,7 @@ import time
 
 import numpy as np
 import torch
+from torch.utils.data import DataLoader, Subset
 from tqdm import tqdm
 
 import dnnlib
@@ -60,72 +61,82 @@ def ensure_reproducibility(seed):
         torch.backends.cudnn.benchmark = False
 
 
-def one_hot_to_index(one_hot):
-    """Convert one-hot encoded labels to integer indices."""
-    return int(np.argmax(one_hot))
+def get_train_samples(dataset, sampling, num_workers=3):
 
+    raw_labels = dataset._get_raw_labels()
+    rev_label_map = dataset.get_rev_label_map()  # {raw_label: internal_index}
 
-def get_train_samples(dataset, sampling, experiment_index, num_experiments):
+    if not rev_label_map:
+        rev_label_map = {i: i for i in range(dataset.label_dim)}
 
-    rev_label_map = dataset.get_rev_label_map()
+    # Build the map of {internal_class_idx: [list of dataset indices]}
+    # This is much faster than iterating the dataset with __getitem__
+    # We iterate over the unique raw labels present in the dataset (or the map)
 
-    # Set a counter per class
-    counter = dict()
-    for class_idx in rev_label_map.keys():
-        counter[class_idx] = sampling
+    # Create a reverse lookup for the whole array is faster using numpy masks
+    dataset_indices = np.arange(len(dataset))
 
-    # Iterate through the dataset saving the indices of each class separately
-    class_indexes = dict()
-    for class_idx in rev_label_map.keys():
-        class_indexes[class_idx] = []
-    # Start at a random index and move through the set until the data is covered
-    starting_index = np.random.randint(0, len(dataset))
-    total = sum(counter.values())
-    pbar = tqdm(total=total, desc=f"Experiment {experiment_index+1}/{num_experiments} - Gathering real samples")
+    selected_indices = []
 
-    idx = starting_index
-    while sum(counter.values()) != 0:
-        label = one_hot_to_index(dataset[idx][1])
+    for raw_label, internal_idx in rev_label_map.items():
+        # Find all indices in the dataset that have this raw_label
+        # raw_labels can be int64 or one-hot (float32). ImageFolderDataset _load_raw_labels returns int64 or float32.
+        # Based on dataset.py, it returns (N,) int64 for categorical.
 
-        if counter[label] > 0:
-            class_indexes[label].append(idx)
-            counter[label] -= 1
-            pbar.update(1)
+        class_mask = raw_labels == raw_label
+        available_indices = dataset_indices[class_mask]
 
-        idx = (idx + 1) % len(dataset)
+        # If we need more samples than available, we might need to replace=True
+        replace = len(available_indices) < sampling
 
-    pbar.close()
+        # Randomly sample indices for this class
+        if len(available_indices) > 0:
+            chosen = np.random.choice(available_indices, sampling, replace=replace)
+            selected_indices.extend(chosen)
+        else:
+            print(f"Warning: No samples found for class {raw_label} (internal {internal_idx})")
 
-    assert sum(counter.values()) == 0, f"Not all classes were filled correctly: {counter}"
+    # Create a Subset and DataLoader
+    # This allows us to use multiple workers to load images (I/O + decode) in parallel
+    subset = Subset(dataset, selected_indices)
 
-    samples = []
-    for class_idx in class_indexes.keys():
-        new_samples = [
-            torch.from_numpy(dataset[j][0]).to(torch.float32) / 127.5 - 1 for j in class_indexes[class_idx]
-        ]  # do not store the label
-        samples.extend(new_samples)
+    # We need a custom collate or just iterate the loader.
+    loader = DataLoader(subset, batch_size=128, shuffle=False, num_workers=num_workers, pin_memory=True)
 
-    return torch.stack(samples)
+    batch_list = []
+    for images, _ in loader:
+        # Normalize to [-1, 1]
+        images = images.to(torch.float32) / 127.5 - 1
+        batch_list.append(images)
 
+    if not batch_list:
+        return torch.tensor([])
 
-def obtain_samples_from_pool(pool, classes, num_samples):
-    """Obtain samples from the pool for the specified classes."""
-    samples = []
-    for class_idx in classes:
-        class_samples = pool[class_idx]
-        selected_indices = np.random.choice(class_samples.shape[0], num_samples, replace=False)
-        for idx in selected_indices:
-            samples.append((class_samples[idx], class_idx))
-    return samples
+    return torch.cat(batch_list, dim=0)
 
 
 def get_synthetic_samples(pool, classes, num_samples):
-    samples = []
+    samples_list = []
+
     for class_idx in classes:
-        samples_class = obtain_samples_from_pool(pool, [class_idx], num_samples)
-        samples_class = [np.transpose(sample[0].cpu(), (2, 0, 1)) for sample in samples_class]
-        samples.extend(samples_class)
-    return torch.stack(samples)
+        # pool[class_idx] is a tensor of shape [Total_N, H, W, C] (NHWC)
+        class_pool = pool[class_idx]
+        total_available = class_pool.shape[0]
+
+        # Randomly select indices
+        # If we request more than available, we must replace.
+        replace = num_samples > total_available
+        selected_indices = np.random.choice(total_available, num_samples, replace=replace)
+
+        # Index directly into the tensor (fast)
+        selected_batch = class_pool[selected_indices]  # [num_samples, H, W, C]
+
+        # Permute to [num_samples, C, H, W] (NCHW) expected by the judge model
+        selected_batch = selected_batch.permute(0, 3, 1, 2)
+
+        samples_list.append(selected_batch)
+
+    return torch.cat(samples_list, dim=0)
 
 
 parser = argparse.ArgumentParser(description="Hyperspectral Image Classification")
@@ -321,7 +332,7 @@ if num_gpus > 1:
 ##########################################################################################
 
 
-print("-" * 20 + "\nCalculating FID")
+print("-" * 20)
 
 sampling_fid = args.pool_size // 2
 assert (
@@ -333,10 +344,10 @@ experiments_fid = 5
 fid_results = []
 fid_times = []
 
-for i in range(experiments_fid):
+for i in tqdm(range(experiments_fid), desc="FID Experiments"):
     start = time.time()
 
-    examples_1 = get_train_samples(datasets["train"], sampling_fid, i, experiments_fid)
+    examples_1 = get_train_samples(datasets["train"], sampling_fid)
     examples_2 = get_synthetic_samples(pool, class_labels, sampling_fid)
 
     fid_results.append(
@@ -350,7 +361,7 @@ for i in range(experiments_fid):
 ##########################################################################################
 
 
-print("-" * 20 + "\nCalculating Precision and Recall")
+print("-" * 20)
 
 sampling_pr = args.pool_size
 assert (
@@ -366,10 +377,10 @@ precision_results = []
 recall_results = []
 precision_recall_times = []
 
-for i in range(experiments_pr):
+for i in tqdm(range(experiments_pr), desc="Precision/Recall Experiments"):
     start = time.time()
 
-    examples_1 = get_train_samples(datasets["train"], sampling_pr, i, experiments_pr)
+    examples_1 = get_train_samples(datasets["train"], sampling_pr)
     examples_2 = get_synthetic_samples(pool, class_labels, sampling_pr)
 
     # Extract features using the judge model

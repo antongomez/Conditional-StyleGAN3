@@ -181,7 +181,6 @@ def noise_to_images_multiclass(
     if num_gpus is None:
         num_gpus = torch.cuda.device_count()
     if num_gpus > 1:
-        print(f"Using {num_gpus} GPUs for image generation.")
         G = torch.nn.DataParallel(G)
 
     # Generate images in batches
