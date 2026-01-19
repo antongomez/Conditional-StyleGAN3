@@ -167,6 +167,7 @@ def parse_comma_separated_list(s):
 @click.option('--autoen-kimg',  help='Autoencoder pretraining duration', metavar='KIMG',        type=click.IntRange(min=0), default=0, show_default=True)
 @click.option('--autoen-patience',  help='Autoencoder early stopping patience in ticks', metavar='INT',     type=click.IntRange(min=0), default=0, show_default=True)
 @click.option('--autoen-min-delta', help='Autoencoder early stopping min delta',         metavar='FLOAT',   type=click.FloatRange(min=0), default=0.0, show_default=True)
+@click.option('--judge-model-path', help='Path to the judge model for manifold metrics', metavar='PATH', type=str, default=None, show_default=True)
 
 # Memory save arguments
 @click.option('--save-all-snaps',help='Save all snapshots during training',        metavar='BOOL',  type=bool, default=False, show_default=True)
@@ -194,6 +195,11 @@ def parse_comma_separated_list(s):
 @click.option('--nobench',      help='Disable cuDNN benchmarking', metavar='BOOL',              type=bool, default=False, show_default=True)
 @click.option('--workers',      help='DataLoader worker processes', metavar='INT',              type=click.IntRange(min=1), default=3, show_default=True)
 @click.option('-n','--dry-run', help='Print training options and exit',                         is_flag=True)
+
+# Custom misc settings for manifold metrics
+@click.option('--manifold-interval',    help='Interval (in ticks) to evaluate manifold metrics', metavar='INT', type=click.IntRange(min=1), default=50, show_default=True)
+@click.option('--manifold-num-images',  help='Number of images per class to generate for manifold metrics', metavar='INT', type=click.IntRange(min=1), default=200, show_default=True)
+@click.option('--manifold-experiments', help='Number of manifold metric experiments to average', metavar='INT', type=click.IntRange(min=1), default=1, show_default=True)
 # fmt: on
 
 
@@ -273,6 +279,12 @@ def main(**kwargs):
     # Memory save option
     c.save_all_fakes = opts.save_all_fakes
     c.save_all_snaps = opts.save_all_snaps
+
+    # Manifold metrics settings
+    c.judge_model_path = opts.judge_model_path
+    c.manifold_interval = opts.manifold_interval
+    c.manifold_num_images_per_class = opts.manifold_num_images
+    c.manifold_experiments = opts.manifold_experiments
 
     # Sanity checks.
     if c.batch_size % c.num_gpus != 0:

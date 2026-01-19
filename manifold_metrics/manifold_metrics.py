@@ -1,4 +1,3 @@
-import time
 import warnings
 
 import numpy as np
@@ -6,26 +5,7 @@ import scipy
 import torch
 
 
-def get_features(model, examples, batch_size=128, device="cpu"):
-    """Helper to extract features in batches."""
-    model.eval()
-    features_list = []
-
-    if isinstance(examples, list):
-        examples = torch.stack(examples)
-
-    num_samples = len(examples)
-
-    with torch.no_grad():
-        for i in range(0, num_samples, batch_size):
-            batch = examples[i : i + batch_size].to(device)
-            _, features = model(batch)
-            features_list.append(features.cpu())
-
-    return torch.cat(features_list, dim=0).numpy()
-
-
-def calculate_fid(model, examples_1, examples_2, batch_size=128, device="cpu"):
+def calculate_fid(features_1, features_2):
     """Calculates the Fréchet Inception Distance (FID) between two sets of examples.
 
     The FID is a measure of similarity between two sets of images. It is calculated
@@ -33,11 +13,8 @@ def calculate_fid(model, examples_1, examples_2, batch_size=128, device="cpu"):
     of a pre-trained network.
 
     Args:
-        model (torch.nn.Module): The feature extractor network (e.g., InceptionV3).
-        examples_1 (torch.Tensor or list): A batch of images from the first set (e.g., real images).
-        examples_2 (torch.Tensor or list): A batch of images from the second set (e.g., generated images).
-        batch_size (int, optional): The batch size for feature extraction. Defaults to 32.
-        device (str, optional): The device to use for computation ('cpu' or 'cuda'). Defaults to "cpu".
+        features_1 (torch.Tensor or list): A batch of images from the first set (e.g., real images).
+        features_2 (torch.Tensor or list): A batch of images from the second set (e.g., generated images).
 
     Raises:
         ValueError: If the FID calculation results in a complex number with a
@@ -47,25 +24,14 @@ def calculate_fid(model, examples_1, examples_2, batch_size=128, device="cpu"):
         float: The calculated FID score.
     """
 
-    model = model.to(device)
+    mu1, sigma1 = np.mean(features_1, axis=0), np.cov(features_1, rowvar=False)
+    mu2, sigma2 = np.mean(features_2, axis=0), np.cov(features_2, rowvar=False)
 
-    act1 = get_features(model, examples_1, batch_size, device)
-    act2 = get_features(model, examples_2, batch_size, device)
-
-    torch.cuda.empty_cache()
-
-    mu1, sigma1 = np.mean(act1, axis=0), np.cov(act1, rowvar=False)
-    mu2, sigma2 = np.mean(act2, axis=0), np.cov(act2, rowvar=False)
-
-    # Check that it is symmetric
+    # Check for symmetry
     if not np.allclose(sigma1, sigma1.T, atol=1e-6):
         warnings.warn("Sigma1 is not symmetric")
-    else:
-        warnings.warn("Sigma1 is symmetric")
     if not np.allclose(sigma2, sigma2.T, atol=1e-6):
         warnings.warn("Sigma2 is not symmetric")
-    else:
-        warnings.warn("Sigma2 is symmetric")
 
     diff = mu1 - mu2
 
@@ -89,8 +55,7 @@ def calculate_fid(model, examples_1, examples_2, batch_size=128, device="cpu"):
     tr_covmean = np.trace(covmean)
     fid = diff.dot(diff) + np.trace(sigma1) + np.trace(sigma2) - 2 * tr_covmean
 
-    del act1, act2, mu1, mu2, sigma1, sigma2, diff, covmean, tr_covmean
-    torch.cuda.empty_cache()
+    del mu1, mu2, sigma1, sigma2, diff, covmean, tr_covmean
 
     return fid
 
@@ -327,14 +292,19 @@ def knn_precision_recall_features(
     return state
 
 
-def compute_precision_recall(judge_model, examples_1, examples_2, batch_size=128, device="cpu", num_gpus=1):
-    """Computes k-NN precision and recall between two sets of examples using a judge model."""
+def compute_precision_recall(features_1, features_2, num_gpus=1):
+    """
+    Computes k-NN precision and recall between two sets of examples using a judge model.
 
-    judge_model = judge_model.to(device)
+    Args:
+        features_1 (torch.Tensor): Feature vectors from the first set (e.g., real images).
+        features_2 (torch.Tensor): Feature vectors from the second set (e.g., generated images).
+        num_gpus (int): Number of GPUs to use for computation.
 
-    # Extract features using the judge model with batching
-    features_1 = get_features(judge_model, examples_1, batch_size, device)
-    features_2 = get_features(judge_model, examples_2, batch_size, device)
+    Returns:
+        float: Precision score.
+        float: Recall score.
+    """
 
     state = knn_precision_recall_features(
         features_1, features_2, row_batch_size=10000, col_batch_size=50000, num_gpus=num_gpus

@@ -7,7 +7,6 @@ import glob
 import json
 import math
 import os
-import re
 import time
 import warnings
 from datetime import datetime
@@ -203,6 +202,7 @@ def output_csv_line(
         experiment_name (str): Directory name of the experiment so it can be traced back
         dataset_name (str): Name of the dataset
         training_options (dict): Dictionary of training options
+        best_tick_kimg (float): Best tick in kimgs
         oa_test (float): Overall Accuracy on test set
         aa_test (float): Average Accuracy on test set
         oa_val (float): Overall Accuracy on validation set
@@ -246,13 +246,14 @@ def output_csv_line(
         f.write(",".join(map(str, values)) + "\n")
 
 
-def get_best_tick_performance(experiment_dir, output_dir, seed=None):
+def get_best_tick_performance(experiment_dir, output_dir, dataset_seed=None):
     """
     Extracts the best tick performance from the experiment results.
 
     Args:
         experiment_dir (str): Directory containing the experiment results.
         output_dir (str): Directory containing the processing summary.
+        dataset_seed (int, optional): Seed used for dataset splitting (default: None).
     Returns:
         tuple: Best tick performance data and class labels.
     """
@@ -261,7 +262,10 @@ def get_best_tick_performance(experiment_dir, output_dir, seed=None):
 
     with open(
         os.path.join(
-            output_dir, "processing_summary" + (f"_{seed}" if seed is not None and seed != 0 else "") + ".json"
+            output_dir,
+            "processing_summary"
+            + (f"_{dataset_seed}" if dataset_seed is not None and dataset_seed != 0 else "")
+            + ".json",
         ),
         "r",
     ) as f:
@@ -282,7 +286,7 @@ def get_best_tick_performance(experiment_dir, output_dir, seed=None):
 
 
 def select_network_snapshot(
-    experiment_dir, output_dir, selection_method="best_val_aa", remove_other_snapshots=False, seed=None
+    experiment_dir, output_dir, selection_method="best_val_aa", remove_other_snapshots=False, dataset_seed=None
 ):
     """
     Selects a network snapshot from an experiment directory based on the specified method.
@@ -292,12 +296,15 @@ def select_network_snapshot(
         output_dir (str): Directory containing the processing summary.
         selection_method (str): Method for selecting the snapshot ('best_val_aa' or 'last').
         remove_other_snapshots (bool): If True, removes other .pkl files.
+        dataset_seed (int): Seed used for dataset splitting.
 
     Returns:
         tuple: Path to the selected network snapshot and its performance data.
     """
 
-    best_tick_performance, class_labels = get_best_tick_performance(experiment_dir, output_dir, seed=seed)
+    best_tick_performance, class_labels = get_best_tick_performance(
+        experiment_dir, output_dir, dataset_seed=dataset_seed
+    )
     print(f"Class labels found: {class_labels}")
 
     if selection_method == "best_val_aa":
@@ -346,12 +353,12 @@ def main():
     parser = argparse.ArgumentParser(description="Evaluate a pretrained StyleGAN discriminator on multispectral images")
 
     # Required arguments
-    parser.add_argument("--network", dest="network_pkl", type=str, default=None, help="Discriminator pickle filename")
+    parser.add_argument("--network-pkl", type=str, default=None, help="Path to the trained GAN .pkl file (if experiment-dir not provided)")
     parser.add_argument("--experiment-dir", default=None, help="Directory containing the experiment results (if network not provided)")
     parser.add_argument("--data-zip", type=str, required=True, help="Path to the zip file with images to evaluate")
     parser.add_argument("--input-path", type=str, default="./data", help="Path to the input multispectral dataset")
     parser.add_argument("--filename", type=str, required=True, help="Base filename (without extension)")
-    parser.add_argument("--seed", type=int, default=None, help="Random seed for reproducibility (default: None)")
+    parser.add_argument("--dataset-seed", type=int, default=None, help="Seed used for dataset splitting (default: None)")
 
     # Optional arguments
     parser.add_argument("--split-format", type=str, default="json", choices=["json", "pickle", "npz"], help="Format for saving split information (default: json)")
@@ -370,10 +377,10 @@ def main():
 
     # Check if network path is provided, if not extract the best network based in validation AA
     if args.network_pkl is None and args.experiment_dir is None:
-        raise ValueError("Either --network or --experiment-dir must be provided.")
+        raise ValueError("Either --network-pkl or --experiment-dir must be provided.")
     if args.network_pkl is not None and args.experiment_dir is not None:
         args.experiment_dir = None
-        warnings.warn("Both --network and --experiment-dir are provided. The network will be used.", UserWarning)
+        warnings.warn("Both --network-pkl and --experiment-dir are provided. The network will be used.", UserWarning)
 
     best_tick_performance = None
     if args.experiment_dir is not None:
@@ -382,7 +389,7 @@ def main():
             output_dir=output_dir,
             selection_method=args.selection_method,
             remove_other_snapshots=args.remove,
-            seed=args.seed,
+            dataset_seed=args.dataset_seed,
         )
 
     # Load discriminator
@@ -441,9 +448,11 @@ def main():
 
         train_size = get_train_size(
             os.path.join(
-                os.path.dirname(args.data_zip),
+                input_dir,
                 "patches",
-                "split_info" + (f"_{args.seed}" if args.seed is not None and args.seed != 0 else "") + ".json",
+                "split_info"
+                + (f"_{args.dataset_seed}" if args.dataset_seed is not None and args.dataset_seed != 0 else "")
+                + ".json",
             )
         )
         with open(os.path.join(args.experiment_dir, "training_options.json"), "r") as f:

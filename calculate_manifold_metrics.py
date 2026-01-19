@@ -24,19 +24,198 @@ The script performs the following steps:
 
 
 import argparse
+import glob
+import json
+import math
 import os
 import random
 import time
+import warnings
 
 import numpy as np
 import torch
-from torch.utils.data import DataLoader, Subset
+from torch.utils.data import DataLoader
 from tqdm import tqdm
 
 import dnnlib
 from gen_images import generate_images
-from manifold_metrics import HYPERPARAMS, CNN2D_Residual, DatasetMock, calculate_fid, compute_precision_recall
+from manifold_metrics import (
+    HYPERPARAMS,
+    CNN2D_Residual,
+    DatasetMock,
+    calculate_fid,
+    compute_precision_recall,
+    get_synthetic_features,
+    get_train_features,
+)
 from multispectral_utils import build_dataset, init_dataset_kwargs
+from visualization_utils import extract_best_tick, read_jsonl
+
+
+def get_best_tick_performance(experiment_dir, output_dir, dataset_seed=None):
+    """
+    Extracts the best tick performance from the experiment results.
+
+    Args:
+        experiment_dir (str): Directory containing the experiment results.
+        output_dir (str): Directory containing the processing summary.
+        dataset_seed (int, optional): Seed used for dataset splitting (default: None).
+    Returns:
+        tuple: Best tick performance data and class labels.
+    """
+
+    jsonl_data = read_jsonl(os.path.join(experiment_dir, "stats.jsonl"))
+
+    with open(
+        os.path.join(
+            output_dir,
+            "processing_summary"
+            + (f"_{dataset_seed}" if dataset_seed is not None and dataset_seed != 0 else "")
+            + ".json",
+        ),
+        "r",
+    ) as f:
+        summary = json.load(f)
+    label_map = summary.get("label_map", {})
+    class_labels = [int(label) for label in label_map.keys()]
+
+    best_tick_performance = extract_best_tick(
+        jsonl_data,
+        class_labels,
+        performance_key="avg",
+        verbose=False,
+        only_tick_with_pkl=True,
+        network_snapshot_ticks=1,
+    )
+
+    return best_tick_performance, class_labels
+
+
+def select_network_snapshot(experiment_dir, output_dir, selection_method="best_val_aa", dataset_seed=None):
+    """
+    Selects a network snapshot from an experiment directory based on the specified method.
+
+    Args:
+        experiment_dir (str): Directory containing the experiment results.
+        output_dir (str): Directory containing the processing summary.
+        selection_method (str): Method for selecting the snapshot ('best_val_aa' or 'last').
+        dataset_seed (int, optional): Seed used for dataset splitting (default: None).
+
+    Returns:
+        tuple: Path to the selected network snapshot and its performance data.
+    """
+
+    best_tick_performance, class_labels = get_best_tick_performance(
+        experiment_dir, output_dir, dataset_seed=dataset_seed
+    )
+    print(f"Class labels found: {class_labels}")
+
+    if selection_method == "best_val_aa":
+        network_pkl = os.path.join(experiment_dir, f"network-snapshot-{int(best_tick_performance['kimg']):06d}.pkl")
+        print(f"Selected network based on best validation AA: {network_pkl}")
+        print(
+            f"Best tick: {int(best_tick_performance['tick'])} with AA: {best_tick_performance['avg_accuracy_val']:.4f} and OA: {best_tick_performance['overall_accuracy_val']:.4f}"
+        )
+    elif selection_method == "last":
+        pkl_files = sorted(glob.glob(os.path.join(experiment_dir, "network-snapshot-*.pkl")))
+        if not pkl_files:
+            raise ValueError(f"No network snapshots found in {experiment_dir}")
+        network_pkl = pkl_files[-1]
+        best_tick_performance = None  # No performance data for 'last' method
+        print(f"Selected the last network snapshot: {network_pkl}")
+    else:
+        raise ValueError(f"Invalid selection method: {selection_method}. Choose 'best_val_aa' or 'last'.")
+
+    return network_pkl, best_tick_performance
+
+
+def output_csv_line(
+    output_dir,
+    output_filename,
+    experiment_name,
+    dataset_name,
+    training_options,
+    best_tick_kimg,
+    mean_fid,
+    std_fid,
+    mean_precision,
+    std_precision,
+    mean_recall,
+    std_recall,
+):
+    """
+    Write a line to the results CSV file.
+
+    Args:
+        output_dir (str): Directory to save the CSV file
+        output_filename (str): Name of the CSV file
+        experiment_name (str): Directory name of the experiment so it can be traced back
+        dataset_name (str): Name of the dataset
+        training_options (dict): Dictionary of training options
+        best_tick_kimg (float): Best tick in kimgs
+        mean_fid (float): Mean FID score
+        std_fid (float): Standard deviation of FID score
+        mean_precision (float): Mean Precision score
+        std_precision (float): Standard deviation of Precision score
+        mean_recall (float): Mean Recall score
+        std_recall (float): Standard deviation of Recall score
+    """
+    os.makedirs(output_dir, exist_ok=True)
+    csv_path = os.path.join(output_dir, output_filename)
+
+    # Check valid training options keys
+    valid_keys = {"uniform_class", "disc_on_gen", "autoencoder_epochs"}
+    for key in training_options.keys():
+        if key not in valid_keys:
+            raise ValueError(f"Invalid training option key: {key}. Valid keys are: {valid_keys}")
+
+    # Create header if file does not exist
+    if not os.path.exists(csv_path):
+        with open(csv_path, "w") as f:
+            headers = (
+                ["experiment_name", "dataset"]
+                + list(training_options.keys())
+                + [
+                    "best_tick_kimg",
+                    "mean_fid",
+                    "std_fid",
+                    "mean_precision",
+                    "std_precision",
+                    "mean_recall",
+                    "std_recall",
+                ]
+            )
+            f.write(",".join(headers) + "\n")
+
+    # Write data line
+    with open(csv_path, "a") as f:
+        values = (
+            [experiment_name, dataset_name]
+            + list(training_options.values())
+            + [
+                f"{float(best_tick_kimg):.3f}",
+                f"{mean_fid:.6f}",
+                f"{std_fid:.6f}",
+                f"{mean_precision:.6f}",
+                f"{std_precision:.6f}",
+                f"{mean_recall:.6f}",
+                f"{std_recall:.6f}",
+            ]
+        )
+        f.write(",".join(map(str, values)) + "\n")
+
+
+def get_train_size(split_info_path):
+    with open(split_info_path, "r") as f:
+        split_info = json.load(f)
+    train_size = int(split_info.get("split_stats", {}).get("train_samples"))
+    return train_size
+
+
+def compute_autoencoder_epochs(autoencoder_kimg, train_size):
+    if autoencoder_kimg is None:
+        return None
+    return math.ceil(autoencoder_kimg * 1000 / train_size)
 
 
 def get_device():
@@ -118,88 +297,11 @@ def apply_distribution_matching(pool, target_stats, pool_stats):
     return new_pool
 
 
-def get_train_samples(dataset, sampling, num_workers=3):
-
-    raw_labels = dataset._get_raw_labels()
-    rev_label_map = dataset.get_rev_label_map()  # {raw_label: internal_index}
-
-    if not rev_label_map:
-        rev_label_map = {i: i for i in range(dataset.label_dim)}
-
-    # Build the map of {internal_class_idx: [list of dataset indices]}
-    # This is much faster than iterating the dataset with __getitem__
-    # We iterate over the unique raw labels present in the dataset (or the map)
-
-    # Create a reverse lookup for the whole array is faster using numpy masks
-    dataset_indices = np.arange(len(dataset))
-
-    selected_indices = []
-
-    for raw_label, internal_idx in rev_label_map.items():
-        # Find all indices in the dataset that have this raw_label
-        # raw_labels can be int64 or one-hot (float32). ImageFolderDataset _load_raw_labels returns int64 or float32.
-        # Based on dataset.py, it returns (N,) int64 for categorical.
-
-        class_mask = raw_labels == raw_label
-        available_indices = dataset_indices[class_mask]
-
-        # If we need more samples than available, we might need to replace=True
-        replace = len(available_indices) < sampling
-
-        # Randomly sample indices for this class
-        if len(available_indices) > 0:
-            chosen = np.random.choice(available_indices, sampling, replace=replace)
-            selected_indices.extend(chosen)
-        else:
-            print(f"Warning: No samples found for class {raw_label} (internal {internal_idx})")
-
-    # Create a Subset and DataLoader
-    # This allows us to use multiple workers to load images (I/O + decode) in parallel
-    subset = Subset(dataset, selected_indices)
-
-    # We need a custom collate or just iterate the loader.
-    loader = DataLoader(subset, batch_size=128, shuffle=False, num_workers=num_workers, pin_memory=True)
-
-    batch_list = []
-    for images, _ in loader:
-        # Normalize to [-1, 1]
-        images = images.to(torch.float32) / 127.5 - 1
-        batch_list.append(images)
-
-    if not batch_list:
-        return torch.tensor([])
-
-    return torch.cat(batch_list, dim=0)
-
-
-def get_synthetic_samples(pool, classes, num_samples):
-    samples_list = []
-
-    for class_idx in classes:
-        # pool[class_idx] is a tensor of shape [Total_N, H, W, C] (NHWC)
-        class_pool = pool[class_idx]
-        total_available = class_pool.shape[0]
-
-        # Randomly select indices
-        # If we request more than available, we must replace.
-        replace = num_samples > total_available
-        selected_indices = np.random.choice(total_available, num_samples, replace=replace)
-
-        # Index directly into the tensor (fast)
-        selected_batch = class_pool[selected_indices]  # [num_samples, H, W, C]
-
-        # Permute to [num_samples, C, H, W] (NCHW) expected by the judge model
-        selected_batch = selected_batch.permute(0, 3, 1, 2)
-
-        samples_list.append(selected_batch)
-
-    return torch.cat(samples_list, dim=0)
-
-
 parser = argparse.ArgumentParser(description="Hyperspectral Image Classification")
 
 # fmt: off
-parser.add_argument("--network-pkl",        help="Model to use",                                                                type=str, required=True)
+parser.add_argument("--network-pkl",        help="Model to use",                                                                type=str, default=None)
+parser.add_argument("--experiment-dir",     help="Directory containing the experiment results (if network not provided)",       type=str, default=None)
 parser.add_argument("--patch-size",         help="Patch size",                                                                  type=int, default=32)
 parser.add_argument("--fid-model-path",     help="Model to calculate FID",                                                      type=str, default=None)
 # Pool size parameter
@@ -209,16 +311,38 @@ parser.add_argument("--input-path",         help="Path to the input multispectra
 parser.add_argument("--filename",           help="Base filename (without extension)",                                           type=str, required=True)
 parser.add_argument("--dataset-seed",       help="Random seed for dataset splitting",                                           type=int, default=0)
 
-parser.add_argument("--batch-size_load",    help="Batch size for data loaders",                                                 type=int, default=512)
-parser.add_argument("--batch-size_gen",     help="Batch size for image generation",                                             type=int, default=128)
-parser.add_argument("--batch-size-metrics", help="Batch size for metric calculation",                                           type=int, default=512)
+parser.add_argument("--selection-method",   help="Method for selecting the snapshot ('best_val_aa' or 'last')",                 type=str, default="last", choices=["best_val_aa", "last"])
+
+parser.add_argument("--batch-size-stats",   help="Batch size for statistics calculation",                                       type=int, default=512)
+parser.add_argument("--batch-size-gen",     help="Batch size for image generation",                                             type=int, default=128)
+parser.add_argument("--batch-size-feat",    help="Batch size for feature extraction",                                           type=int, default=512)
+parser.add_argument("--num-workers",        help="Number of DataLoader workers",                                                type=int, default=3)
 
 parser.add_argument("--synthetic-norm",     help="Wheter to normalize the synthetic images or not",                             action="store_true", default=False)
 parser.add_argument("--show-pool-stats",    help="Wheter to show the pool statistics or not",                                   action="store_true", default=False)
 parser.add_argument("--num-gpus",           help="Number of GPUs to use (default: all available)",                              type=int, default=None)
+
+parser.add_argument("--output-csv",         help="Output CSV filename for results (default: manifold_results.csv)",             type=str, default="manifold_results.csv")
 # fmt: on
 
 args = parser.parse_args()
+input_dir = os.path.join(args.input_path, args.filename)
+output_dir = os.path.join(args.input_path, args.filename, "patches")
+
+if args.network_pkl is None and args.experiment_dir is None:
+    raise ValueError("Either --network-pkl or --experiment-dir must be provided.")
+if args.network_pkl is not None and args.experiment_dir is not None:
+    args.experiment_dir = None
+    warnings.warn("Both --network-pkl and --experiment-dir are provided. The network will be used.", UserWarning)
+
+best_tick_performance = None
+if args.experiment_dir is not None:
+    args.network_pkl, best_tick_performance = select_network_snapshot(
+        experiment_dir=args.experiment_dir,
+        output_dir=output_dir,
+        selection_method=args.selection_method,
+        dataset_seed=args.dataset_seed,
+    )
 
 device = get_device()
 cuda = device.type == "cuda"
@@ -244,9 +368,6 @@ else:
 # -------------------------------------- DATA LOADING ---------------------------------- #
 ##########################################################################################
 
-input_dir = os.path.join(args.input_path, args.filename)
-output_dir = os.path.join(args.input_path, args.filename, "patches")
-
 # Build datasets
 datasets = dict()
 for split_key in ["train", "val", "test"]:
@@ -260,7 +381,7 @@ for split_key in ["train", "val", "test"]:
     datasets[split_key], _ = build_dataset(
         dataset_kwargs=dataset_kwargs,
         data_loader_kwargs=dnnlib.EasyDict(),
-        batch_size=args.batch_size_load,
+        batch_size=args.batch_size_feat,
     )
 
 # {<index>: <label> - 1}; <index> between 0 and num_classes - 1; <label> true label in the dataset
@@ -336,7 +457,7 @@ if args.show_pool_stats or args.synthetic_norm:
     for split in ["train", "test"]:
         mean, std = compute_dataset_stats(
             datasets[split],
-            batch_size=args.batch_size_load,
+            batch_size=args.batch_size_stats,
             device=device,
             desc=f"Stats ({split})",
         )
@@ -392,12 +513,25 @@ fid_times = []
 for i in tqdm(range(experiments_fid), desc="FID Experiments"):
     start = time.time()
 
-    examples_1 = get_train_samples(datasets["train"], sampling_fid)
-    examples_2 = get_synthetic_samples(pool, class_labels, sampling_fid)
-
-    fid_results.append(
-        calculate_fid(judge_model, examples_1, examples_2, batch_size=args.batch_size_metrics, device=device)
+    features_1 = get_train_features(
+        datasets["train"],
+        sampling_fid,
+        judge_model,
+        batch_size=args.batch_size_feat,
+        num_workers=args.num_workers,
+        device=device,
     )
+    features_2 = get_synthetic_features(
+        pool,
+        class_labels,
+        sampling_fid,
+        judge_model,
+        batch_size=args.batch_size_feat,
+        num_workers=args.num_workers,
+        device=device,
+    )
+
+    fid_results.append(calculate_fid(features_1, features_2))
     fid_times.append(time.time() - start)
 
 
@@ -425,16 +559,25 @@ precision_recall_times = []
 for i in tqdm(range(experiments_pr), desc="Precision/Recall Experiments"):
     start = time.time()
 
-    examples_1 = get_train_samples(datasets["train"], sampling_pr)
-    examples_2 = get_synthetic_samples(pool, class_labels, sampling_pr)
-
-    # Extract features using the judge model
-    features_1 = []
-    features_2 = []
-
-    precision, recall = compute_precision_recall(
-        judge_model, examples_1, examples_2, batch_size=args.batch_size_metrics, device=device, num_gpus=num_gpus
+    features_1 = get_train_features(
+        datasets["train"],
+        sampling_pr,
+        judge_model,
+        batch_size=args.batch_size_feat,
+        num_workers=args.num_workers,
+        device=device,
     )
+    features_2 = get_synthetic_features(
+        pool,
+        class_labels,
+        sampling_pr,
+        judge_model,
+        batch_size=args.batch_size_feat,
+        num_workers=args.num_workers,
+        device=device,
+    )
+
+    precision, recall = compute_precision_recall(features_1, features_2, num_gpus=num_gpus)
 
     precision_results.append(precision)
     recall_results.append(recall)
@@ -444,10 +587,59 @@ for i in tqdm(range(experiments_pr), desc="Precision/Recall Experiments"):
 # ------------------------------------- SHOW RESULTS ----------------------------------- #
 ##########################################################################################
 
+mean_fid, std_fid = np.mean(fid_results), np.std(fid_results)
+mean_fid_time, std_fid_time = np.mean(fid_times), np.std(fid_times)
+
+mean_precision, std_precision = np.mean(precision_results), np.std(precision_results)
+mean_recall, std_recall = np.mean(recall_results), np.std(recall_results)
+mean_pr_time, std_pr_time = np.mean(precision_recall_times), np.std(precision_recall_times)
+
+# Output CSV line
+if args.output_csv:
+    if args.experiment_dir is None or best_tick_performance is None:
+        # Get the dir from the network path
+        args.experiment_dir = os.path.dirname(args.network_pkl)
+        best_tick_performance, _ = get_best_tick_performance(args.experiment_dir, output_dir)
+
+    train_size = get_train_size(
+        os.path.join(
+            input_dir,
+            "patches",
+            "split_info"
+            + (f"_{args.dataset_seed}" if args.dataset_seed is not None and args.dataset_seed != 0 else "")
+            + ".json",
+        )
+    )
+    with open(os.path.join(args.experiment_dir, "training_options.json"), "r") as f:
+        training_options = json.load(f)
+
+    training_options = {
+        "uniform_class": training_options.get("uniform_class_labels", None),
+        "disc_on_gen": training_options.get("disc_on_gen", None),
+        "autoencoder_epochs": compute_autoencoder_epochs(training_options.get("autoencoder_kimg", None), train_size),
+    }
+
+    output_csv_line(
+        output_dir=".",
+        output_filename=args.output_csv,
+        experiment_name=args.experiment_dir,
+        dataset_name=args.filename,
+        training_options=training_options,
+        best_tick_kimg=best_tick_performance["kimg"],
+        mean_fid=mean_fid,
+        std_fid=std_fid,
+        mean_precision=mean_precision,
+        std_precision=std_precision,
+        mean_recall=mean_recall,
+        std_recall=std_recall,
+    )
+    print(f"Results written to {os.path.join('.', args.output_csv)}")
+
+
 # Show the results
 print("-" * 20 + "\nFinal results:")
-print(f"FID: {np.mean(fid_results):.6f} +/- {np.std(fid_results):.6f}")
-print(f"Time: {np.mean(fid_times):.6f} +/- {np.std(fid_times):.6f}")
-print(f"Precision: {np.mean(precision_results):.6f} +/- {np.std(precision_results):.6f}")
-print(f"Recall: {np.mean(recall_results):.6f} +/- {np.std(recall_results):.6f}")
-print(f"Time: {np.mean(precision_recall_times):.6f} +/- {np.std(precision_recall_times):.6f}")
+print(f"FID: {mean_fid:.6f} +/- {std_fid:.6f}")
+print(f"Time: {mean_fid_time:.6f} +/- {std_fid_time:.6f}")
+print(f"Precision: {mean_precision:.6f} +/- {std_precision:.6f}")
+print(f"Recall: {mean_recall:.6f} +/- {std_recall:.6f}")
+print(f"Time: {mean_pr_time:.6f} +/- {std_pr_time:.6f}")

@@ -23,7 +23,15 @@ from torch.utils.data.distributed import DistributedSampler
 
 import dnnlib
 import legacy
-from metrics import metric_main
+from manifold_metrics import (
+    HYPERPARAMS,
+    CNN2D_Residual,
+    DatasetMock,
+    calculate_fid,
+    compute_precision_recall,
+    get_synthetic_features,
+    get_train_features,
+)
 from torch_utils import misc, training_stats
 from torch_utils.ops import conv2d_gradfix, grid_sample_gradfix
 from visualization_utils import compute_avg_accuracy
@@ -179,6 +187,10 @@ def training_loop(
     autoencoder_kimg=0,  # Number of kimg to train the autoencoder for at the beginning of training.
     autoencoder_patience=0,  # Number of ticks to wait for improvement before stopping the autoencoder training.
     autoencoder_min_delta=0.0,  # Minimum change in validation loss to be considered an improvement for early stopping of the autoencoder.
+    judge_model_path=None,  # Path to the judge model for FID/Manifold metrics.
+    manifold_interval=1,  # Interval (in ticks) to calculate FID/Manifold metrics.
+    manifold_num_images_per_class=200,  # Number of samples per class for FID/Manifold metrics.
+    manifold_experiments=1,  # Number of times to repeat the FID/Manifold experiment.
 ):
     # Initialize.
     start_time = time.time()
@@ -339,15 +351,17 @@ def training_loop(
 
     # Export sample images.
     grid_size = None
-    grid_z = None
-    grid_c = None
+    latent_tensor = None
+    label_tensor = None
     if rank == 0:
         print("Exporting sample images...")
         grid_size, images, labels = setup_snapshot_image_grid(training_set=training_set)
         save_image_grid(images, os.path.join(run_dir, "reals.png"), drange=[0, 255], grid_size=grid_size)
-        grid_z = torch.randn([labels.shape[0], G.z_dim], device=device).split(batch_gpu)
-        grid_c = torch.from_numpy(labels).to(device).split(batch_gpu)
-        images = torch.cat([G_ema(z=z, c=c, noise_mode="const").cpu() for z, c in zip(grid_z, grid_c)]).numpy()
+        latent_tensor = torch.randn([labels.shape[0], G.z_dim], device=device).split(batch_gpu)
+        label_tensor = torch.from_numpy(labels).to(device).split(batch_gpu)
+        images = torch.cat(
+            [G_ema(z=z, c=c, noise_mode="const").cpu() for z, c in zip(latent_tensor, label_tensor)]
+        ).numpy()
         save_image_grid(images, os.path.join(run_dir, "fakes_init.png"), drange=[-1, 1], grid_size=grid_size)
 
     # Initialize logs.
@@ -357,6 +371,18 @@ def training_loop(
     stats_metrics = dict()
     stats_jsonl = None
     stats_tfevents = None
+
+    # Setup FID/Manifold metrics
+    judge_model = None
+    if judge_model_path is not None:
+        if rank == 0:
+            print(f"Loading judge model from {judge_model_path}...")
+
+        # Load judge model
+        judge_model = CNN2D_Residual(DatasetMock(), device, HYPERPARAMS)
+        judge_model.load_state_dict(torch.load(judge_model_path, map_location=device))
+        judge_model.eval()
+
     if rank == 0:
         stats_jsonl = open(os.path.join(run_dir, "stats.jsonl"), "wt")
         process = None
@@ -549,7 +575,8 @@ def training_loop(
         # Evaluate validation set
         if loss_kwargs.class_weight > 0:
             if rank == 0:
-                print("Evaluating validation set...", end=" ")
+                print("Evaluating validation set...", end="")
+                start_time_val = time.time()
             with torch.no_grad():
                 for val_real_img, val_real_c in validation_set_iterator:
                     val_real_img = (val_real_img.to(device).to(torch.float32) / 127.5 - 1).split(batch_gpu)
@@ -559,7 +586,147 @@ def training_loop(
                         loss.evaluate_discriminator(real_img=real_img, real_c=real_c, batch_size=batch_gpu)
                         loss.evaluate_autoencoder(real_img=real_img, real_c=real_c, batch_size=batch_gpu)
             if rank == 0:
-                print("Finished!")
+                end_time_val = time.time()
+                print(f" Finished! ({end_time_val - start_time_val:.2f}s)")
+                training_stats.report0("Timing/val_sec", end_time_val - start_time_val)
+
+        # Evaluate Manifold Metrics (FID, Precision, Recall)
+        if (judge_model is not None) and (cur_tick % manifold_interval == 0):
+            if rank == 0:
+                print(f"Evaluating Manifold Metrics ({manifold_experiments} experiments)...", end="")
+                start_time_manifold = time.time()
+
+            class_labels = list(training_set.get_label_map().values())
+            total_images = manifold_num_images_per_class * len(class_labels)
+
+            start_time_image_gen = time.time()
+
+            # Distribute image generation across GPUs
+            images_per_gpu = total_images // num_gpus
+            remainder = total_images % num_gpus
+
+            # Each rank generates a portion of images (distribute remainder to first ranks)
+            if rank < remainder:
+                rank_start_idx = rank * (images_per_gpu + 1)
+                rank_total_images = images_per_gpu + 1
+            else:
+                rank_start_idx = rank * images_per_gpu + remainder
+                rank_total_images = images_per_gpu
+
+            # Construct the label tensor for this rank's portion
+            labels_all = torch.zeros([total_images, G.c_dim], device=device)
+            for i in range(len(class_labels)):
+                labels_all[
+                    i * manifold_num_images_per_class : (i + 1) * manifold_num_images_per_class, class_labels[i]
+                ] = 1
+
+            # Get only the labels needed for this rank
+            rank_labels = labels_all[rank_start_idx : rank_start_idx + rank_total_images]
+
+            # Generate this rank's portion of synthetic images in batches to avoid OOM
+            images_list = []
+            num_batches = (rank_total_images + batch_gpu - 1) // batch_gpu  # Ceiling division
+
+            for batch_idx in range(num_batches):
+                start_idx = batch_idx * batch_gpu
+                end_idx = min(start_idx + batch_gpu, rank_total_images)
+                current_batch_size = end_idx - start_idx
+
+                # Generate latents and labels for this batch
+                z_batch = torch.randn([current_batch_size, G.z_dim], device=device)
+                c_batch = rank_labels[start_idx:end_idx]
+
+                # Generate images and immediately move to CPU to free GPU memory
+                with torch.no_grad():
+                    batch_images = G_ema(z=z_batch, c=c_batch, noise_mode="const")
+                    batch_images = batch_images.permute(0, 2, 3, 1).contiguous().cpu()  # NCHW -> NHWC, then to CPU
+
+                images_list.append(batch_images)
+
+                # Free GPU memory
+                del z_batch, c_batch, batch_images
+
+            # Concatenate all batches for this rank
+            rank_images = torch.cat(images_list, dim=0)
+            del images_list
+            torch.cuda.empty_cache()
+
+            # Gather images from all ranks if using multiple GPUs
+            if num_gpus > 1:
+                # Prepare list to gather all tensors
+                gathered_images = [torch.zeros_like(rank_images) for _ in range(num_gpus)]
+                torch.distributed.all_gather(gathered_images, rank_images)
+
+                # Concatenate in correct order, handling different sizes
+                all_images_parts = []
+                for gpu_rank in range(num_gpus):
+                    if gpu_rank < remainder:
+                        expected_size = images_per_gpu + 1
+                    else:
+                        expected_size = images_per_gpu
+                    all_images_parts.append(gathered_images[gpu_rank][:expected_size])
+
+                images = torch.cat(all_images_parts, dim=0)
+                del gathered_images, all_images_parts
+            else:
+                images = rank_images
+
+            del rank_images
+
+            if rank == 0:
+                # Save the samples in a dictionary, one key for each class
+                pool = dict()
+                for i, class_idx in enumerate(class_labels):
+                    pool[class_idx] = images[
+                        i * manifold_num_images_per_class : (i + 1) * manifold_num_images_per_class, :, :, :
+                    ]
+
+                end_time_image_gen = time.time()
+                training_stats.report0("Metrics/image_gen_sec", end_time_image_gen - start_time_image_gen)
+
+                for _ in range(manifold_experiments):
+                    # Generate and extract features
+                    start_time_real_features = time.time()
+                    real_features = get_train_features(
+                        dataset=training_set,
+                        num_images_per_class=manifold_num_images_per_class,
+                        judge_model=judge_model,
+                        batch_size=512,  # use a big batch_size and fixed
+                        num_workers=data_loader_kwargs.num_workers,  # reutilize the num_workers parameter for dataloader
+                        device=device,
+                    )
+                    end_time_real_features = time.time()
+                    fake_features = get_synthetic_features(
+                        pool=pool,
+                        classes=class_labels,
+                        num_images_per_class=manifold_num_images_per_class,
+                        judge_model=judge_model,
+                        batch_size=512,  # use a big batch_size and fixed
+                        num_workers=data_loader_kwargs.num_workers,
+                        device=device,
+                    )
+                    end_time_fake_features = time.time()
+
+                    start_fid_time = time.time()
+                    fid_score = calculate_fid(real_features, fake_features)
+                    end_fid_time = time.time()
+                    precision, recall = compute_precision_recall(real_features, fake_features, num_gpus=num_gpus)
+                    end_precision_recall_time = time.time()
+
+                    # Report only from rank 0
+                    training_stats.report0("Metrics/fid", fid_score)
+                    training_stats.report0("Metrics/precision", precision)
+                    training_stats.report0("Metrics/recall", recall)
+
+                    training_stats.report0("Timing/real_features_sec", end_time_real_features - start_time_real_features) # fmt: skip
+                    training_stats.report0("Timing/fake_features_sec", end_time_fake_features - end_time_real_features)
+
+                    training_stats.report0("Timing/fid_sec", end_fid_time - start_fid_time)
+                    training_stats.report0("Timing/precision_recall_sec", end_precision_recall_time - end_fid_time)
+
+            if rank == 0:
+                end_time_manifold = time.time()
+                print(f"Finished! ({end_time_manifold - start_time_manifold:.2f}s)")
 
         # Collect statistics.
         for phase in phases:
@@ -612,7 +779,9 @@ def training_loop(
             and (done or cur_tick % image_snapshot_ticks == 0)
             and (save_all_fakes or is_best_so_far or done)
         ):
-            images = torch.cat([G_ema(z=z, c=c, noise_mode="const").cpu() for z, c in zip(grid_z, grid_c)]).numpy()
+            images = torch.cat(
+                [G_ema(z=z, c=c, noise_mode="const").cpu() for z, c in zip(latent_tensor, label_tensor)]
+            ).numpy()
             save_image_grid(
                 images, os.path.join(run_dir, f"fakes{cur_nimg//1000:06d}.png"), drange=[-1, 1], grid_size=grid_size
             )
@@ -658,25 +827,6 @@ def training_loop(
 
                 with open(snapshot_pkl, "wb") as f:
                     pickle.dump(snapshot_data, f)
-
-        # Evaluate metrics.
-        if (snapshot_data is not None) and (len(metrics) > 0):
-            if rank == 0:
-                print("Evaluating metrics...")
-            for metric in metrics:
-                result_dict = metric_main.calc_metric(
-                    metric=metric,
-                    G=snapshot_data["G_ema"],
-                    dataset_kwargs=training_set_kwargs,
-                    num_gpus=num_gpus,
-                    rank=rank,
-                    device=device,
-                )
-                if rank == 0:
-                    metric_main.report_metric(result_dict, run_dir=run_dir, snapshot_pkl=snapshot_pkl)
-                stats_metrics.update(result_dict.results)
-            if rank == 0:
-                print("Finished!")
 
         del snapshot_data  # conserve memory
 
