@@ -527,7 +527,6 @@ for i in tqdm(range(experiments_fid), desc="FID Experiments"):
         sampling_fid,
         judge_model,
         batch_size=args.batch_size_feat,
-        num_workers=args.num_workers,
         device=device,
     )
 
@@ -573,7 +572,6 @@ for i in tqdm(range(experiments_pr), desc="Precision/Recall Experiments"):
         sampling_pr,
         judge_model,
         batch_size=args.batch_size_feat,
-        num_workers=args.num_workers,
         device=device,
     )
 

@@ -110,7 +110,6 @@ def get_synthetic_features(
     num_images_per_class,
     judge_model,
     batch_size=128,
-    num_workers=3,
     device="cpu",
     seed=None,
 ):
@@ -123,7 +122,6 @@ def get_synthetic_features(
         num_images_per_class: Number of samples per class.
         judge_model: The model used to extract features.
         batch_size: Batch size for feature extraction.
-        num_workers: Number of DataLoader workers.
         device: Device to use (e.g., "cpu" or "cuda").
         seed: Random seed for reproducibility (optional).
     Returns:
@@ -163,7 +161,7 @@ def get_synthetic_features(
     dataset = TensorDataset(all_samples)
 
     # Each GPU should process all images to get complete features for FID calculation
-    loader = DataLoader(dataset, batch_size=batch_size, shuffle=False, pin_memory=True, num_workers=num_workers)
+    loader = DataLoader(dataset, batch_size=batch_size, shuffle=False, pin_memory=True)
 
     # Extract features in batches
     judge_model.eval()

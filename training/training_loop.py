@@ -636,10 +636,10 @@ def training_loop(
                 z_batch = torch.randn([current_batch_size, G.z_dim], device=device)
                 c_batch = rank_labels[start_idx:end_idx]
 
-                # Generate images and immediately move to CPU to free GPU memory
+                # Generate images (keep in GPU)
                 with torch.no_grad():
                     batch_images = G_ema(z=z_batch, c=c_batch, noise_mode="const")
-                    batch_images = batch_images.permute(0, 2, 3, 1).contiguous().cpu()  # NCHW -> NHWC, then to CPU
+                    batch_images = batch_images.permute(0, 2, 3, 1)  # NCHW -> NHWC
 
                 images_list.append(batch_images)
 
@@ -649,7 +649,6 @@ def training_loop(
             # Concatenate all batches for this rank
             rank_images = torch.cat(images_list, dim=0)
             del images_list
-            torch.cuda.empty_cache()
 
             # Gather images from all ranks if using multiple GPUs
             if num_gpus > 1:
@@ -672,15 +671,18 @@ def training_loop(
                 images = rank_images
 
             del rank_images
+            torch.cuda.empty_cache()
 
+            # Move images to CPU for metric calculations
             if rank == 0:
+                images = images.cpu()
                 # Save the samples in a dictionary, one key for each class
                 pool = dict()
                 for i, class_idx in enumerate(class_labels):
                     pool[class_idx] = images[
                         i * manifold_num_images_per_class : (i + 1) * manifold_num_images_per_class, :, :, :
                     ]
-
+                    # PROBEI AQUI A FACER UN CLONE E CONTIGUOUS PERO NON TIRA, TEÑO QUE PREGUNTARLLE A CLAUDE MAÑA
                 end_time_image_gen = time.time()
                 training_stats.report0("Metrics/image_gen_sec", end_time_image_gen - start_time_image_gen)
 
@@ -702,7 +704,6 @@ def training_loop(
                         num_images_per_class=manifold_num_images_per_class,
                         judge_model=judge_model,
                         batch_size=512,  # use a big batch_size and fixed
-                        num_workers=data_loader_kwargs.num_workers,
                         device=device,
                     )
                     end_time_fake_features = time.time()
