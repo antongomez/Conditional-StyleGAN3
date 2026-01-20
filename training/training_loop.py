@@ -576,7 +576,9 @@ def training_loop(
         if loss_kwargs.class_weight > 0:
             if rank == 0:
                 print("Evaluating validation set...", end="")
-                start_time_val = time.time()
+
+            start_time_val = time.time()
+
             with torch.no_grad():
                 for val_real_img, val_real_c in validation_set_iterator:
                     val_real_img = (val_real_img.to(device).to(torch.float32) / 127.5 - 1).split(batch_gpu)
@@ -585,21 +587,22 @@ def training_loop(
                     for real_img, real_c in zip(val_real_img, val_real_c):
                         loss.evaluate_discriminator(real_img=real_img, real_c=real_c, batch_size=batch_gpu)
                         loss.evaluate_autoencoder(real_img=real_img, real_c=real_c, batch_size=batch_gpu)
+
+            end_time_val = time.time()
+            training_stats.report0("Timing/val_sec", end_time_val - start_time_val)
+
             if rank == 0:
-                end_time_val = time.time()
                 print(f" Finished! ({end_time_val - start_time_val:.2f}s)")
-                training_stats.report0("Timing/val_sec", end_time_val - start_time_val)
 
         # Evaluate Manifold Metrics (FID, Precision, Recall)
         if (judge_model is not None) and (cur_tick % manifold_interval == 0):
             if rank == 0:
-                print(f"Evaluating Manifold Metrics ({manifold_experiments} experiments)...", end="")
-                start_time_manifold = time.time()
+                print(f"Evaluating Manifold Metrics ({manifold_experiments} experiments per gpu)...", end="")
+
+            start_time_manifold = time.time()
 
             class_labels = list(training_set.get_label_map().values())
             total_images = manifold_num_images_per_class * len(class_labels)
-
-            start_time_image_gen = time.time()
 
             # Distribute image generation across GPUs
             images_per_gpu = total_images // num_gpus
@@ -642,8 +645,6 @@ def training_loop(
                     batch_images = batch_images.permute(0, 2, 3, 1)  # NCHW -> NHWC
 
                 images_list.append(batch_images)
-
-                # Free GPU memory
                 del z_batch, c_batch, batch_images
 
             # Concatenate all batches for this rank
@@ -674,59 +675,59 @@ def training_loop(
             torch.cuda.empty_cache()
 
             # Move images to CPU for metric calculations
+            images = images.cpu()
+            # Save the samples in a dictionary, one key for each class
+            pool = dict()
+            for i, class_idx in enumerate(class_labels):
+                pool[class_idx] = images[
+                    i * manifold_num_images_per_class : (i + 1) * manifold_num_images_per_class, :, :, :
+                ]
+
+            end_time_image_gen = time.time()
+            # Report time taken for image generation only from rank 0. Both GPUs collaborated in generation.
+            training_stats.report0("Metrics/image_gen_sec", end_time_image_gen - start_time_manifold)
+
+            for _ in range(manifold_experiments):
+                # Generate and extract features
+                start_time_real_features = time.time()
+                real_features = get_train_features(
+                    dataset=training_set,
+                    num_images_per_class=manifold_num_images_per_class,
+                    judge_model=judge_model,
+                    batch_size=512,  # use a big batch_size and fixed
+                    num_workers=data_loader_kwargs.num_workers,  # reutilize the num_workers parameter for dataloader
+                    device=device,
+                )
+                end_time_real_features = time.time()
+                fake_features = get_synthetic_features(
+                    pool=pool,
+                    classes=class_labels,
+                    num_images_per_class=manifold_num_images_per_class,
+                    judge_model=judge_model,
+                    batch_size=512,  # use a big batch_size and fixed
+                    device=device,
+                )
+                end_time_fake_features = time.time()
+
+                start_fid_time = time.time()
+                fid_score = calculate_fid(real_features, fake_features)
+                end_fid_time = time.time()
+                precision, recall = compute_precision_recall(real_features, fake_features, num_gpus=1)
+                end_precision_recall_time = time.time()
+
+                # Report from all ranks, at the end, we compute num_gpus * manifold_experiments values
+                training_stats.report("Metrics/fid", fid_score)
+                training_stats.report("Metrics/precision", precision)
+                training_stats.report("Metrics/recall", recall)
+
+                training_stats.report("Timing/real_features_sec", end_time_real_features - start_time_real_features) # fmt: skip
+                training_stats.report("Timing/fake_features_sec", end_time_fake_features - end_time_real_features)
+
+                training_stats.report("Timing/fid_sec", end_fid_time - start_fid_time)
+                training_stats.report("Timing/precision_recall_sec", end_precision_recall_time - end_fid_time)
+
+            end_time_manifold = time.time()
             if rank == 0:
-                images = images.cpu()
-                # Save the samples in a dictionary, one key for each class
-                pool = dict()
-                for i, class_idx in enumerate(class_labels):
-                    pool[class_idx] = images[
-                        i * manifold_num_images_per_class : (i + 1) * manifold_num_images_per_class, :, :, :
-                    ]
-                    # PROBEI AQUI A FACER UN CLONE E CONTIGUOUS PERO NON TIRA, TEÑO QUE PREGUNTARLLE A CLAUDE MAÑA
-                end_time_image_gen = time.time()
-                training_stats.report0("Metrics/image_gen_sec", end_time_image_gen - start_time_image_gen)
-
-                for _ in range(manifold_experiments):
-                    # Generate and extract features
-                    start_time_real_features = time.time()
-                    real_features = get_train_features(
-                        dataset=training_set,
-                        num_images_per_class=manifold_num_images_per_class,
-                        judge_model=judge_model,
-                        batch_size=512,  # use a big batch_size and fixed
-                        num_workers=data_loader_kwargs.num_workers,  # reutilize the num_workers parameter for dataloader
-                        device=device,
-                    )
-                    end_time_real_features = time.time()
-                    fake_features = get_synthetic_features(
-                        pool=pool,
-                        classes=class_labels,
-                        num_images_per_class=manifold_num_images_per_class,
-                        judge_model=judge_model,
-                        batch_size=512,  # use a big batch_size and fixed
-                        device=device,
-                    )
-                    end_time_fake_features = time.time()
-
-                    start_fid_time = time.time()
-                    fid_score = calculate_fid(real_features, fake_features)
-                    end_fid_time = time.time()
-                    precision, recall = compute_precision_recall(real_features, fake_features, num_gpus=num_gpus)
-                    end_precision_recall_time = time.time()
-
-                    # Report only from rank 0
-                    training_stats.report0("Metrics/fid", fid_score)
-                    training_stats.report0("Metrics/precision", precision)
-                    training_stats.report0("Metrics/recall", recall)
-
-                    training_stats.report0("Timing/real_features_sec", end_time_real_features - start_time_real_features) # fmt: skip
-                    training_stats.report0("Timing/fake_features_sec", end_time_fake_features - end_time_real_features)
-
-                    training_stats.report0("Timing/fid_sec", end_fid_time - start_fid_time)
-                    training_stats.report0("Timing/precision_recall_sec", end_precision_recall_time - end_fid_time)
-
-            if rank == 0:
-                end_time_manifold = time.time()
                 print(f"Finished! ({end_time_manifold - start_time_manifold:.2f}s)")
 
         # Collect statistics.
@@ -797,6 +798,7 @@ def training_loop(
                         pass
                 best_fake_grid_path = os.path.join(run_dir, f"fakes{cur_nimg//1000:06d}")
 
+        # Save network snapshot.
         if (
             network_snapshot_ticks is not None
             and (cur_tick % network_snapshot_ticks == 0 or done)
