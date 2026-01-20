@@ -161,6 +161,7 @@ def parse_comma_separated_list(s):
 # Custom optional features.
 @click.option('--data-val',     help='Validation data', metavar='[ZIP|DIR]',                    type=str, default="", show_default=True)
 @click.option('--cls-weight',   help='Weight of the classification loss', metavar='FLOAT',      type=click.FloatRange(min=0, max=1), default=0.0, show_default=True)
+@click.option('--cls-start',    help='Kimg to start classification loss', metavar='KIMG',       type=click.IntRange(min=0), default=0, show_default=True)
 @click.option('--uniform-class',help='Use uniform class labels', metavar='BOOL',                type=bool, default=False, show_default=True)
 @click.option('--disc-on-gen',  help='Run discriminator on generated images', metavar='BOOL',   type=bool, default=False, show_default=True)
 @click.option('--use-label-map',help='Use label map for non-consecutive integer labels', metavar='BOOL', type=bool, default=False, show_default=True)
@@ -269,7 +270,8 @@ def main(**kwargs):
     c.data_loader_kwargs.num_workers = opts.workers
 
     # Optional custom features.
-    c.loss_kwargs.class_weight = opts.cls_weight
+    c.loss_kwargs.classification_weight = opts.cls_weight
+    c.loss_kwargs.classification_start_kimg = opts.cls_start
     c.uniform_class_labels = opts.uniform_class 
     c.disc_on_gen = opts.disc_on_gen
     c.autoencoder_kimg = opts.autoen_kimg    

@@ -126,7 +126,8 @@ class StyleGAN2Loss(Loss):
         pl_no_weight_grad=False,
         blur_init_sigma=0,
         blur_fade_kimg=0,
-        class_weight=0,
+        classification_weight=0,
+        classification_start_kimg=0,
         label_map=None,
         autoencoder_kimg=0,
     ):
@@ -144,7 +145,8 @@ class StyleGAN2Loss(Loss):
         self.pl_mean = torch.zeros([], device=device)
         self.blur_init_sigma = blur_init_sigma
         self.blur_fade_kimg = blur_fade_kimg
-        self.class_weight = class_weight
+        self.classification_weight = classification_weight
+        self.classification_start_kimg = classification_start_kimg
         self.label_map = label_map
         self.autoencoder_kimg = autoencoder_kimg
 
@@ -174,7 +176,7 @@ class StyleGAN2Loss(Loss):
             img, c, update_emas=update_emas, return_latents=return_latents
         )
         return conditioned_logits, classification_logits
-    
+
     def get_features(self, img, c):
         with torch.no_grad():
             features, _ = self.D(img, c, return_features=True)
@@ -188,6 +190,8 @@ class StyleGAN2Loss(Loss):
             phase = {"Greg": "none", "Gboth": "Gmain"}.get(phase, phase)
         if self.r1_gamma == 0:
             phase = {"Dreg": "none", "Dboth": "Dmain"}.get(phase, phase)
+
+        cw = self.classification_weight if cur_nimg >= self.classification_start_kimg * 1e3 else 0
 
         if phase == "AE":
             with torch.autograd.profiler.record_function("AE_forward"):
@@ -286,7 +290,7 @@ class StyleGAN2Loss(Loss):
                     loss_cls_gen = 0
 
             with torch.autograd.profiler.record_function("Dgen_backward"):
-                (loss_Dgen + self.class_weight * loss_cls_gen).mean().mul(gain).backward()
+                (loss_Dgen + cw * loss_cls_gen).mean().mul(gain).backward()
 
         # Dmain: Maximize logits for real images.
         # Dr1: Apply R1 regularization.
@@ -318,7 +322,7 @@ class StyleGAN2Loss(Loss):
                     if real_logits is not None:
                         loss_cls_real = torch.nn.functional.cross_entropy(real_logits, real_c.argmax(dim=1))
                         training_stats.report("Loss/D/classification/real", loss_cls_real)
-                    loss_Dtotal = loss_Dreal + self.class_weight * loss_cls_real
+                    loss_Dtotal = loss_Dreal + cw * loss_cls_real
 
                 loss_Dr1 = 0
                 if phase in ["Dreg", "Dboth"]:

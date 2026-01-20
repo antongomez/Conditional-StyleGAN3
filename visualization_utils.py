@@ -57,6 +57,15 @@ def extract_metrics(jsonl_data, class_labels):
         "Timing/Gboth",
         "Timing/Dmain",
         "Timing/Dreg",
+        "Timing/val_sec",
+        "Timing/image_gen_sec",
+        "Metrics/fid",
+        "Metrics/precision",
+        "Metrics/recall",
+        "Timing/real_features_sec",
+        "Timing/fake_features_sec",
+        "Timing/fid_sec",
+        "Timing/precision_recall_sec",
         "timestamp",
     ]
     metric_keys.extend([f"Accuracy/real/{c}" for c in class_labels])
@@ -177,7 +186,8 @@ def summarize_training_options(json_path):
         config = json.load(f)
 
     # Extract relevant configuration parameters
-    class_weight = config.get("loss_kwargs", {}).get("class_weight")
+    classification_weight = config.get("loss_kwargs", {}).get("classification_weight")
+    classification_start_kimg = config.get("loss_kwargs", {}).get("classification_start_kimg")
     num_gpus = config.get("num_gpus")
     batch_size = config.get("batch_size")
     uniform_class_labels = config.get("uniform_class_labels")
@@ -190,7 +200,8 @@ def summarize_training_options(json_path):
 
     print("📋 Training Configuration Summary")
     print("────────────────────────────────────")
-    print(f"⚖️ Class weight: {class_weight}")
+    print(f"⚖️ Class weight: {classification_weight}")
+    print(f"🎯 Classification start kimg: {classification_start_kimg}")
     print(f"🖥️ Number of GPUs: {num_gpus}")
     print(f"📦 Batch size: {batch_size}")
     print(f"🎯 Uniform class labels: {uniform_class_labels}")

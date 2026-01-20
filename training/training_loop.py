@@ -233,18 +233,6 @@ def training_loop(
     validation_set = dnnlib.util.construct_class_by_name(
         **validation_set_kwargs
     )  # subclass of training.dataset.Dataset
-    validation_set_sampler = DistributedSampler(
-        validation_set,
-        num_replicas=num_gpus,
-        rank=rank,
-        shuffle=False,
-    )  # no need to shuffle nor an infinite sampler for validation
-    validation_set_iterator = torch.utils.data.DataLoader(
-        dataset=validation_set,
-        sampler=validation_set_sampler,
-        batch_size=batch_size // num_gpus,
-        **data_loader_kwargs,
-    )
 
     if rank == 0:
         print()
@@ -261,7 +249,7 @@ def training_loop(
     )
     # Add output_dim to epilogue_kwargs to perform classification
     D_kwargs.epilogue_kwargs.output_dim = (
-        training_set.label_shape[0] if training_set.has_labels and loss_kwargs.class_weight > 0 else 0
+        training_set.label_shape[0] if training_set.has_labels and loss_kwargs.classification_weight > 0 else 0
     )
     # Pass label_map to loss class
     loss_kwargs.label_map = (
@@ -573,14 +561,28 @@ def training_loop(
                 print("Aborting...")
 
         # Evaluate validation set
-        if loss_kwargs.class_weight > 0:
+        if loss_kwargs.classification_weight > 0:
             if rank == 0:
                 print("Evaluating validation set...", end="")
 
             start_time_val = time.time()
 
+            # Create a fresh DataLoader for validation to avoid worker issues
+            validation_set_sampler = DistributedSampler(
+                validation_set,
+                num_replicas=num_gpus,
+                rank=rank,
+                shuffle=False,
+            )
+            validation_set_loader = torch.utils.data.DataLoader(
+                dataset=validation_set,
+                sampler=validation_set_sampler,
+                batch_size=batch_size // num_gpus,
+                **data_loader_kwargs,
+            )
+
             with torch.no_grad():
-                for val_real_img, val_real_c in validation_set_iterator:
+                for val_real_img, val_real_c in validation_set_loader:
                     val_real_img = (val_real_img.to(device).to(torch.float32) / 127.5 - 1).split(batch_gpu)
                     val_real_c = val_real_c.to(device).split(batch_gpu)
 
@@ -757,7 +759,7 @@ def training_loop(
                     autoencoder_training_flag = False
 
         # Update best validation average accuracy
-        if loss_kwargs.class_weight > 0 and (done or cur_tick % image_snapshot_ticks == 0):
+        if loss_kwargs.classification_weight > 0 and (done or cur_tick % image_snapshot_ticks == 0):
             val_stats = {key: [val.mean] for key, val in stats_dict.items() if key.startswith("Accuracy/")}
             class_labels = [k.split("/")[-1] for k in val_stats.keys()]
             _, _, _, _, val_avg_acc, _ = compute_avg_accuracy(val_stats, clean_nan=True, class_labels=class_labels)
