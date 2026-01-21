@@ -39,6 +39,66 @@ from visualization_utils import compute_avg_accuracy
 # ----------------------------------------------------------------------------
 
 
+def safe_remove_files(file_path, extensions, other_best_path=None):
+    """
+    Safely remove files with given extensions if the path is different from another best path.
+
+    Args:
+        file_path: Base path of files to remove (without extension)
+        extensions: List of file extensions to remove (e.g., ['.png', '.raw'] or ['.pkl'])
+        other_best_path: Path that should not be removed (e.g., best path for another metric)
+    """
+    if file_path is not None and file_path != other_best_path:
+        for ext in extensions:
+            try:
+                os.remove(file_path + ext)
+            except OSError:
+                pass
+
+
+def update_best_paths(
+    is_best,
+    save_all,
+    current_path,
+    old_best_path,
+    other_metric_best_path,
+    files_extensions,
+    metric_name="",
+    verbose=False,
+):
+    """
+    Update best model paths and remove old files if needed.
+
+    Args:
+        is_best: Whether this is the best result so far
+        save_all: Whether to save all checkpoints
+        current_path: Current file path to potentially set as best
+        old_best_path: Previous best path for this metric
+        other_metric_best_path: Best path for another metric (to avoid deletion)
+        files_extensions: List of file extensions to remove
+        metric_name: Name of the metric for logging
+        verbose: Whether to print removal messages
+
+    Returns:
+        Updated best path or None if not applicable
+    """
+    if is_best and not save_all:
+        if verbose and old_best_path is not None and old_best_path != other_metric_best_path:
+            print(f"Removing previous best {metric_name}:", old_best_path)
+
+        safe_remove_files(old_best_path, files_extensions, other_metric_best_path)
+        new_best_path = current_path
+
+        if verbose:
+            print(f"Updated best {metric_name} path to:", new_best_path)
+
+        return new_best_path
+    return old_best_path
+
+
+# ----------------------------------------------------------------------------
+
+
 def setup_snapshot_image_grid(training_set, random_seed=0):
     rnd = np.random.RandomState(random_seed)
     gw = np.clip(7680 // training_set.image_shape[2], 7, 32)
@@ -206,8 +266,14 @@ def training_loop(
     # Initialize the best validation average accuracy
     best_val_avg_acc = 0.0
     best_val_avg_acc_tick = 0
-    best_snapshot_pkl_path = None
-    best_fake_grid_path = None
+    best_aa_snapshot_pkl_path = None
+    best_aa_fake_grid_path = None
+
+    # Initialize best model based on FID
+    best_fid = float("inf")
+    best_fid_tick = 0
+    best_fid_snapshot_pkl_path = None
+    best_fid_fake_grid_path = None
 
     # Initialize autoencoder early stopping variables
     best_ae_val_loss = float("inf")
@@ -769,19 +835,29 @@ def training_loop(
                     best_val_avg_acc = val_avg_acc
                     best_val_avg_acc_tick = cur_nimg // 1000
 
-        # Save network snapshot.
+        # Update best FID score
+        if judge_model is not None and (done or cur_tick % image_snapshot_ticks == 0):
+            fid_scores = stats_dict.get("Metrics/fid", None)
+            if fid_scores is not None:
+                # Compute average FID from all experiments in this tick
+                fid_avg = fid_scores.mean
+                if fid_avg < best_fid:
+                    best_fid = fid_avg
+                    best_fid_tick = cur_nimg // 1000
+
         snapshot_pkl = None
         snapshot_data = None
 
-        # This line works as expected as long as tick interval is at least 1 kimg
-        is_best_so_far = cur_nimg // 1000 == best_val_avg_acc_tick  # Always true at the beginning
+        # This requires that tick interval is at least 1 kimg
+        is_aa_best_so_far = cur_nimg // 1000 == best_val_avg_acc_tick  # Always true at the beginning
+        is_fid_best_so_far = cur_nimg // 1000 == best_fid_tick
 
         # Save image snapshot.
         if (
             (rank == 0)
             and (image_snapshot_ticks is not None)
             and (done or cur_tick % image_snapshot_ticks == 0)
-            and (save_all_fakes or is_best_so_far or done)
+            and (save_all_fakes or is_aa_best_so_far or is_fid_best_so_far or done)
         ):
             images = torch.cat(
                 [G_ema(z=z, c=c, noise_mode="const").cpu() for z, c in zip(latent_tensor, label_tensor)]
@@ -789,22 +865,33 @@ def training_loop(
             save_image_grid(
                 images, os.path.join(run_dir, f"fakes{cur_nimg//1000:06d}.png"), drange=[-1, 1], grid_size=grid_size
             )
-
-            # Remove previous best fake image if needed
-            if is_best_so_far and not save_all_fakes:
-                if best_fake_grid_path is not None:
-                    try:
-                        os.remove(best_fake_grid_path + ".png")
-                        os.remove(best_fake_grid_path + ".raw")
-                    except OSError:
-                        pass
-                best_fake_grid_path = os.path.join(run_dir, f"fakes{cur_nimg//1000:06d}")
+            current_fake_path = os.path.join(run_dir, f"fakes{cur_nimg//1000:06d}")
+            best_aa_fake_grid_path = update_best_paths(
+                is_aa_best_so_far,
+                save_all_fakes,
+                current_fake_path,
+                best_aa_fake_grid_path,
+                best_fid_fake_grid_path,
+                [".png", ".raw"],
+                metric_name="AA fake grid",
+                verbose=False,
+            )
+            best_fid_fake_grid_path = update_best_paths(
+                is_fid_best_so_far,
+                save_all_fakes,
+                current_fake_path,
+                best_fid_fake_grid_path,
+                best_aa_fake_grid_path,
+                [".png", ".raw"],
+                metric_name="FID fake grid",
+                verbose=False,
+            )
 
         # Save network snapshot.
         if (
             network_snapshot_ticks is not None
             and (cur_tick % network_snapshot_ticks == 0 or done)
-            and (save_all_snaps or is_best_so_far or done)
+            and (save_all_snaps or is_aa_best_so_far or is_fid_best_so_far or done)
         ):
             snapshot_data = dict(
                 G=G, D=D, G_ema=G_ema, augment_pipe=augment_pipe, training_set_kwargs=dict(training_set_kwargs)
@@ -820,17 +907,30 @@ def training_loop(
                 del value  # conserve memory
 
             # Remove previous best snapshot if needed
-            snapshot_pkl = os.path.join(run_dir, f"network-snapshot-{cur_nimg//1000:06d}.pkl")
+            snapshot_base = os.path.join(run_dir, f"network-snapshot-{cur_nimg//1000:06d}")
             if rank == 0:
-                if is_best_so_far and not save_all_snaps:
-                    if best_snapshot_pkl_path is not None:
-                        try:
-                            os.remove(best_snapshot_pkl_path)
-                        except OSError:
-                            pass
-                    best_snapshot_pkl_path = snapshot_pkl
+                best_aa_snapshot_pkl_path = update_best_paths(
+                    is_aa_best_so_far,
+                    save_all_snaps,
+                    snapshot_base,
+                    best_aa_snapshot_pkl_path,
+                    best_fid_snapshot_pkl_path,
+                    [".pkl"],
+                    metric_name="AA snapshot",
+                    verbose=False,
+                )
+                best_fid_snapshot_pkl_path = update_best_paths(
+                    is_fid_best_so_far,
+                    save_all_snaps,
+                    snapshot_base,
+                    best_fid_snapshot_pkl_path,
+                    best_aa_snapshot_pkl_path,
+                    [".pkl"],
+                    metric_name="FID snapshot",
+                    verbose=False,
+                )
 
-                with open(snapshot_pkl, "wb") as f:
+                with open(snapshot_base + ".pkl", "wb") as f:
                     pickle.dump(snapshot_data, f)
 
         del snapshot_data  # conserve memory
