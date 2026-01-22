@@ -392,7 +392,7 @@ label_map = datasets["train"].get_label_map()
 # ------------------------- EXAMPLES OF SYNTHETIC GENERATIONS -------------------------- #
 ##########################################################################################
 
-class_labels = list(label_map.values())
+class_labels = list(label_map.keys())
 
 sample_out_dir = "./out/samples"
 os.makedirs(sample_out_dir, exist_ok=True)
