@@ -845,7 +845,6 @@ def training_loop(
                     best_fid = fid_avg
                     best_fid_tick = cur_nimg // 1000
 
-        snapshot_pkl = None
         snapshot_data = None
 
         # This requires that tick interval is at least 1 kimg

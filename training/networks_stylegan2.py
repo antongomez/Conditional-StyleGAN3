@@ -887,10 +887,6 @@ class DiscriminatorEpilogue(torch.nn.Module):
         x = self.conv(x)
         x = self.fc(x.flatten(1))
         logits = self.out(x)
-        # logits = self.out((x.flatten(1)))
-
-        if return_latents:
-            return logits, None
 
         if return_latents:
             return logits, None
