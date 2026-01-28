@@ -281,7 +281,7 @@ def training_loop(
 
     # We have two ways of specifying a parameter initialization through an AE: setting a
     # fixed number of kimg to train or using early stopping based on validation AE loss
-    autoencoder_training_flag = (autoencoder_kimg > 0) or (autoencoder_patience > 0 and autoencoder_min_delta > 0.0)
+    autoencoder_training_flag = (autoencoder_kimg > 0) or (autoencoder_patience > 0)
 
     # Load training set.
     if rank == 0:
@@ -812,7 +812,7 @@ def training_loop(
         stats_dict = stats_collector.as_dict()
 
         # Early stopping for autoencoder
-        if (autoencoder_patience > 0 and autoencoder_min_delta > 0.0) and autoencoder_training_flag:
+        if autoencoder_patience > 0 and autoencoder_training_flag:
             if "Loss/AE/val/loss" in stats_dict:
                 current_ae_val_loss = stats_dict["Loss/AE/val/loss"].mean
                 if current_ae_val_loss < best_ae_val_loss - autoencoder_min_delta:
