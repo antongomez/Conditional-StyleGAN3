@@ -669,7 +669,7 @@ def training_loop(
 
             start_time_manifold = time.time()
 
-            class_labels = list(training_set.get_label_map().values())
+            class_labels = list(training_set.get_label_map().keys())
             total_images = manifold_num_images_per_class * len(class_labels)
 
             # Distribute image generation across GPUs
