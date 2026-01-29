@@ -213,7 +213,7 @@ def output_csv_line(
     csv_path = os.path.join(output_dir, output_filename)
 
     # Check valid training options keys
-    valid_keys = {"uniform_class", "disc_on_gen", "autoencoder_epochs"}
+    valid_keys = {"uniform_class", "disc_on_gen", "autoencoder_epochs", "classification_weight"}
     for key in training_options.keys():
         if key not in valid_keys:
             raise ValueError(f"Invalid training option key: {key}. Valid keys are: {valid_keys}")
@@ -464,6 +464,7 @@ def main():
             "autoencoder_epochs": compute_autoencoder_epochs(
                 training_options.get("autoencoder_kimg", None), train_size
             ),
+            "classification_weight": training_options.get("loss_kwargs", {}).get("classification_weight", None),
         }
 
         output_csv_line(
