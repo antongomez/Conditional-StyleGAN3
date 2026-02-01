@@ -621,7 +621,7 @@ if args.output_csv:
     output_csv_line(
         output_dir=".",
         output_filename=args.output_csv,
-        experiment_name=args.experiment_dir,
+        experiment_name=os.path.basename(args.experiment_dir),
         dataset_name=args.filename,
         training_options=training_options,
         best_tick_kimg=best_tick_performance["kimg"],
