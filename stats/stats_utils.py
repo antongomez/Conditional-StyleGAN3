@@ -207,4 +207,31 @@ def calculate_stats(grouped_results, dataset_type="test", ref_config=None, test_
                     )
                     continue
 
+    # Calculate global means across all datasets for each configuration
+    global_stats = defaultdict(dict)
+    all_configs = set()
+    for dataset_results in stats.values():
+        all_configs.update(dataset_results.keys())
+
+    for config in all_configs:
+        # Collect all values for this config across all datasets
+        for metric_suffix in metric_suffixes:
+            oa_values = []
+            aa_values = []
+            for dataset in stats.keys():
+                if config in stats[dataset]:
+                    oa_mean, oa_std = stats[dataset][config].get(f"oa{metric_suffix}", (None, None))
+                    aa_mean, aa_std = stats[dataset][config].get(f"aa{metric_suffix}", (None, None))
+                    if oa_mean is not None:
+                        oa_values.append(oa_mean)
+                    if aa_mean is not None:
+                        aa_values.append(aa_mean)
+
+            if oa_values:
+                global_stats[config][f"oa{metric_suffix}"] = (np.mean(oa_values), np.std(oa_values, ddof=1))
+            if aa_values:
+                global_stats[config][f"aa{metric_suffix}"] = (np.mean(aa_values), np.std(aa_values, ddof=1))
+
+    stats["__global__"] = global_stats
+
     return stats
