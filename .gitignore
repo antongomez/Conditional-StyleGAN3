@@ -33,3 +33,5 @@ GEMINI.md
 
 # Ignore judge models
 oitaven_judge*.pth
+
+sota_comparison/

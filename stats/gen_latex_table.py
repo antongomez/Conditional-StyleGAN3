@@ -201,7 +201,10 @@ def generate_manifold_stats_table(stats, display_mode):
     print(
         "        \\textbf{Dataset} &    & "
         + " & ".join(
-            [f"\\textbf{{\\shortstack[c]{{{'\\\\'.join(config_to_header_map.get(config))}}}}}" for config in configs]
+            [
+                "\\textbf{{\\shortstack[c]{{{}}}}}".format("\\\\".join(config_to_header_map.get(config)))
+                for config in configs
+            ]
         )
         + " \\\\"
     )
@@ -233,10 +236,16 @@ def generate_manifold_stats_table(stats, display_mode):
             if config in dataset_results:
                 for metric in cells_content.keys():
                     metric_mean, metric_std = dataset_results[config][metric]
-                    if "std" in display_mode:
-                        formatted_cell_text = f"{metric_mean:.1f} $\\pm$ {metric_std:.1f}"
+                    if metric == "precision" or metric == "recall":
+                        metric_mean_text = metric_mean * 100.0
+                        metric_std_text = metric_std * 100.0
                     else:
-                        formatted_cell_text = f"{metric_mean:.1f}"
+                        metric_mean_text = metric_mean
+                        metric_std_text = metric_std
+                    if "std" in display_mode:
+                        formatted_cell_text = f"{metric_mean_text:.1f} $\\pm$ {metric_std_text:.1f}"
+                    else:
+                        formatted_cell_text = f"{metric_mean_text:.1f}"
 
                     # Check if is the best value to bold
                     if metric == "fid":
@@ -258,8 +267,8 @@ def generate_manifold_stats_table(stats, display_mode):
         print(
             f'        \\multirow{{3}}{{*}}{{\\shortstack[c]{{{dataset_name}}}}} & FID & {" & ".join(cells_content["fid"])} \\\\'
         )
-        print(f'         & Precision & {" & ".join(cells_content["precision"])} \\\\')
-        print(f'         & Recall & {" & ".join(cells_content["recall"])} \\\\')
+        print(f'         & Precision \\% & {" & ".join(cells_content["precision"])} \\\\')
+        print(f'         & Recall \\% & {" & ".join(cells_content["recall"])} \\\\')
 
         if i < len(datasets) - 1:
             print("        \\midrule")
@@ -285,11 +294,16 @@ def generate_manifold_stats_table(stats, display_mode):
             if config in global_results:
                 for metric in cells_content.keys():
                     metric_mean, metric_std = global_results[config][metric]
-                    if "std" in display_mode:
-                        formatted_cell_text = f"{metric_mean:.1f} $\\pm$ {metric_std:.1f}"
+                    if metric == "precision" or metric == "recall":
+                        metric_mean_text = metric_mean * 100.0
+                        metric_std_text = metric_std * 100.0
                     else:
-                        formatted_cell_text = f"{metric_mean:.1f}"
-
+                        metric_mean_text = metric_mean
+                        metric_std_text = metric_std
+                    if "std" in display_mode:
+                        formatted_cell_text = f"{metric_mean_text:.1f} $\\pm$ {metric_std_text:.1f}"
+                    else:
+                        formatted_cell_text = f"{metric_mean_text:.1f}"
                     # Check if is the best value to bold
                     if metric == "fid":
                         is_best = metric_mean == best_fid_val
@@ -310,8 +324,8 @@ def generate_manifold_stats_table(stats, display_mode):
         print(
             f'        \\multirow{{3}}{{*}}{{\\shortstack[c]{{\\textbf{{Average}}}}}} & FID & {" & ".join(cells_content["fid"])} \\\\'
         )
-        print(f'         & Precision & {" & ".join(cells_content["precision"])} \\\\')
-        print(f'         & Recall & {" & ".join(cells_content["recall"])} \\\\')
+        print(f'         & Precision \\% & {" & ".join(cells_content["precision"])} \\\\')
+        print(f'         & Recall \\% & {" & ".join(cells_content["recall"])} \\\\')
 
     print("        \\bottomrule")
     print("    \\end{tabular}")
@@ -336,7 +350,7 @@ def generate_stats_table(
     print("        \\toprule")
     print(
         "        \\textbf{Dataset} &    & "
-        + " & ".join([f"\\thead{{{'\\\\'.join(config_to_header_map.get(config))}}}" for config in configs])
+        + " & ".join(["\\thead{{{}}}".format("\\\\".join(config_to_header_map.get(config))) for config in configs])
         + " \\\\"
     )
     print("        \\midrule")
@@ -394,9 +408,9 @@ def generate_stats_table(
                 cells_content["aa"].append("-")
 
         print(
-            f'        \\multirow{{2}}{{*}}{{\\shortstack[c]{{{dataset_name}}}}} & OA & {" & ".join(cells_content["oa"])} \\\\'
+            f'        \\multirow{{2}}{{*}}{{\\shortstack[c]{{{dataset_name}}}}} & OA \\% & {" & ".join(cells_content["oa"])} \\\\'
         )
-        print(f'         & AA & {" & ".join(cells_content["aa"])} \\\\')
+        print(f'         & AA \\% & {" & ".join(cells_content["aa"])} \\\\')
 
         if i < len(datasets) - 1:
             print("        \\midrule")
@@ -436,9 +450,9 @@ def generate_stats_table(
                 cells_content["aa"].append("-")
 
         print(
-            f'        \\multirow{{2}}{{*}}{{\\shortstack[c]{{\\textbf{{Average}}}}}} & OA & {" & ".join(cells_content["oa"])} \\\\'
+            f'        \\multirow{{2}}{{*}}{{\\shortstack[c]{{\\textbf{{Average}}}}}} & OA \\% & {" & ".join(cells_content["oa"])} \\\\'
         )
-        print(f'         & AA & {" & ".join(cells_content["aa"])} \\\\')
+        print(f'         & AA \\% & {" & ".join(cells_content["aa"])} \\\\')
 
     print("        \\bottomrule")
     print("    \\end{tabular}")

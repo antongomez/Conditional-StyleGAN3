@@ -41,6 +41,12 @@ def parse_args():
         action="store_true",
         help="Use manifold metrics (FID, Precision, Recall) instead of OA and AA",
     )
+    parser.add_argument(
+        "-a",
+        "--average-only",
+        action="store_true",
+        help="Generate only average results table with lambda values as rows and metrics as columns",
+    )
     parser.add_argument("-o", "--output", type=str, default=None, help="Path to output file (default: stdout)")
     return parser.parse_args()
 
@@ -234,7 +240,10 @@ def generate_latex_table(stats_df, dataset_type="test", use_manifold=False):
                         mean_val = row_data["metric3_mean"]
                         std_val = row_data["metric3_std"]
 
-                    cell = format_cell(mean_val, std_val, is_best, percent=not use_manifold)
+                    # For manifold metrics: FID is not percent, Precision and Recall are percent
+                    # For classification metrics: both OA and AA are percent
+                    use_percent = not use_manifold or metric_idx > 0
+                    cell = format_cell(mean_val, std_val, is_best, percent=use_percent)
                     row += f" & {cell}"
 
             row += " \\\\"
@@ -294,7 +303,10 @@ def generate_latex_table(stats_df, dataset_type="test", use_manifold=False):
                     # OA, AA, Precision, Recall: higher is better
                     is_best = mean_val == max(avg_values)
 
-                cell = format_cell(mean_val, std_val, is_best, percent=not use_manifold)
+                # For manifold metrics: FID is not percent, Precision and Recall are percent
+                # For classification metrics: both OA and AA are percent
+                use_percent = not use_manifold or metric_idx > 0
+                cell = format_cell(mean_val, std_val, is_best, percent=use_percent)
                 row += f" & {cell}"
 
         row += " \\\\"
@@ -313,6 +325,118 @@ def generate_latex_table(stats_df, dataset_type="test", use_manifold=False):
         )
     latex.append(f"\\label{{tab:cls_weight_{dataset_type}_results}}")
     latex.append("\\end{table*}")
+
+    return "\n".join(latex)
+
+
+def generate_latex_table_average_only(stats_df, dataset_type="test", use_manifold=False):
+    """
+    Generate LaTeX code for a simplified table with average results only.
+    Rows are lambda values, columns are metrics (OA, AA or FID, Precision, Recall).
+
+    Args:
+        stats_df: DataFrame with statistics
+        dataset_type: Type of dataset used ('test' or 'val')
+        use_manifold: If True, use manifold metrics (FID, Precision, Recall)
+    """
+    # Determine metrics
+    if use_manifold:
+        metric_names = ["FID", "Precision", "Recall"]
+        num_metrics = 3
+    else:
+        metric_names = ["OA", "AA"]
+        num_metrics = 2
+
+    # Get list of unique classification_weights
+    weights = sorted(stats_df["classification_weight"].unique())
+
+    # Column format: Lambda + metrics
+    col_format = "c" + "c" * num_metrics
+
+    # Start table
+    latex = []
+    latex.append("\\begin{table}[tbp]")
+    latex.append("\\centering")
+    latex.append(f"\\begin{{tabular}}{{{col_format}}}")
+    latex.append("        \\toprule")
+
+    # Header
+    header = "        \\thead{$\\boldsymbol{\\lambda}_{\\mathbf{cls}}$}"
+    for metric_name in metric_names:
+        pct = ' (\\%)' if metric_name != 'FID' else ''
+        header += f" & \\thead{{{metric_name}{pct}}}"
+    header += " \\\\"
+    latex.append(header)
+    latex.append("        \\midrule")
+
+    # For each lambda value, calculate average across all datasets
+    all_avg_values = {}
+    for metric_idx in range(num_metrics):
+        all_avg_values[metric_idx] = []
+        for weight in weights:
+            weight_data = stats_df[stats_df["classification_weight"] == weight]
+            if len(weight_data) > 0:
+                if metric_idx == 0:
+                    values = weight_data["metric1_mean"].values
+                elif metric_idx == 1:
+                    values = weight_data["metric2_mean"].values
+                else:  # metric_idx == 2
+                    values = weight_data["metric3_mean"].values
+                all_avg_values[metric_idx].append(np.mean(values))
+
+    # Generate rows for each lambda value
+    for weight_idx, weight in enumerate(weights):
+        weight_data = stats_df[stats_df["classification_weight"] == weight]
+
+        if len(weight_data) == 0:
+            row = f"        {weight}"
+            for _ in range(num_metrics):
+                row += " & -"
+        else:
+            row = f"        {weight}"
+
+            # For each metric, calculate average and std across all datasets
+            for metric_idx in range(num_metrics):
+                if metric_idx == 0:
+                    values = weight_data["metric1_mean"].values
+                elif metric_idx == 1:
+                    values = weight_data["metric2_mean"].values
+                else:  # metric_idx == 2
+                    values = weight_data["metric3_mean"].values
+
+                mean_val = np.mean(values)
+                std_val = np.std(values, ddof=1) if len(values) > 1 else 0.0
+
+                # Determine if this is the best value for this metric
+                if use_manifold and metric_idx == 0:
+                    # FID: lower is better
+                    is_best = mean_val == min(all_avg_values[metric_idx])
+                else:
+                    # OA, AA, Precision, Recall: higher is better
+                    is_best = mean_val == max(all_avg_values[metric_idx])
+
+                # For manifold metrics: FID is not percent, Precision and Recall are percent
+                # For classification metrics: both OA and AA are percent
+                use_percent = not use_manifold or metric_idx > 0
+                cell = format_cell(mean_val, std_val, is_best, percent=use_percent)
+                row += f" & {cell}"
+
+        row += " \\\\"
+        latex.append(row)
+
+    # Close table
+    latex.append("        \\bottomrule")
+    latex.append("    \\end{tabular}")
+    if use_manifold:
+        latex.append(
+            f"\\caption{{Resultados medios de todas as bacías para as métricas de variedade (FID, Precision, Recall) en función do peso de clasificación $\\lambda_{{cls}}$. Valores máis baixos de FID e valores máis altos de Precision e Recall indican mellor rendemento.}}"
+        )
+    else:
+        latex.append(
+            f"\\caption{{Resultados medios de todas as bacías para as métricas de clasificación (OA e AA) en función do peso de clasificación $\\lambda_{{cls}}$. Valores máis altos indican mellor rendemento.}}"
+        )
+    latex.append(f"\\label{{tab:cls_weight_{dataset_type}_average}}")
+    latex.append("\\end{table}")
 
     return "\n".join(latex)
 
@@ -348,7 +472,10 @@ def main():
 
     # Generate LaTeX table
     print("\nGenerating LaTeX table...", flush=True)
-    latex_table = generate_latex_table(stats_df, args.dataset_type, args.manifold_metrics)
+    if args.average_only:
+        latex_table = generate_latex_table_average_only(stats_df, args.dataset_type, args.manifold_metrics)
+    else:
+        latex_table = generate_latex_table(stats_df, args.dataset_type, args.manifold_metrics)
 
     # Save or print
     if args.output:
