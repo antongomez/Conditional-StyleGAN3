@@ -135,13 +135,13 @@ def calculate_manifold_stats(grouped):
     for (dataset, config), group in grouped:
         # Calculate statistics for each manifold metric
         fid_mean = group["mean_fid"].mean()
-        fid_std = group["mean_fid"].std(ddof=1) if len(group) > 1 else 0.0
+        fid_std = group["std_fid"].mean() if "std_fid" in group else 0.0
 
         precision_mean = group["mean_precision"].mean()
-        precision_std = group["mean_precision"].std(ddof=1) if len(group) > 1 else 0.0
+        precision_std = group["std_precision"].mean() if "std_precision" in group else 0.0
 
         recall_mean = group["mean_recall"].mean()
-        recall_std = group["mean_recall"].std(ddof=1) if len(group) > 1 else 0.0
+        recall_std = group["std_recall"].mean() if "std_recall" in group else 0.0
 
         stats[dataset][config]["fid"] = (fid_mean, fid_std)
         stats[dataset][config]["precision"] = (precision_mean, precision_std)
@@ -157,31 +157,37 @@ def calculate_manifold_stats(grouped):
         fid_values = []
         precision_values = []
         recall_values = []
+        fid_std_values = []
+        precision_std_values = []
+        recall_std_values = []
 
         for dataset in stats.keys():
             if config in stats[dataset]:
-                fid_mean, _ = stats[dataset][config]["fid"]
-                precision_mean, _ = stats[dataset][config]["precision"]
-                recall_mean, _ = stats[dataset][config]["recall"]
+                fid_mean, fid_std = stats[dataset][config]["fid"]
+                precision_mean, precision_std = stats[dataset][config]["precision"]
+                recall_mean, recall_std = stats[dataset][config]["recall"]
 
                 fid_values.append(fid_mean)
                 precision_values.append(precision_mean)
                 recall_values.append(recall_mean)
+                fid_std_values.append(fid_std)
+                precision_std_values.append(precision_std)
+                recall_std_values.append(recall_std)
 
         if fid_values:
             global_stats[config]["fid"] = (
                 np.mean(fid_values),
-                np.std(fid_values, ddof=1) if len(fid_values) > 1 else 0.0,
+                np.mean(fid_std_values),
             )
         if precision_values:
             global_stats[config]["precision"] = (
                 np.mean(precision_values),
-                np.std(precision_values, ddof=1) if len(precision_values) > 1 else 0.0,
+                np.mean(precision_std_values),
             )
         if recall_values:
             global_stats[config]["recall"] = (
                 np.mean(recall_values),
-                np.std(recall_values, ddof=1) if len(recall_values) > 1 else 0.0,
+                np.mean(recall_std_values),
             )
 
     stats["__global__"] = global_stats
@@ -195,17 +201,13 @@ def generate_manifold_stats_table(stats, display_mode):
         {config for dataset_results in stats.values() for config in dataset_results.keys()},
         reverse=True,
     )
+    configs = ["00", "10", "01", "11"]  # Fixed order
 
     print("\\begin{tabular}{c l " + " ".join(["c"] * len(configs)) + "}")
     print("        \\toprule")
     print(
-        "        \\textbf{Dataset} &    & "
-        + " & ".join(
-            [
-                "\\textbf{{\\shortstack[c]{{{}}}}}".format("\\\\".join(config_to_header_map.get(config)))
-                for config in configs
-            ]
-        )
+        "        \\thead{Dataset} &    & "
+        + " & ".join(["\\thead{{{}}}".format("\\\\".join(config_to_header_map.get(config))) for config in configs])
         + " \\\\"
     )
     print("        \\midrule")
@@ -265,10 +267,10 @@ def generate_manifold_stats_table(stats, display_mode):
                 cells_content["recall"].append("-")
 
         print(
-            f'        \\multirow{{3}}{{*}}{{\\shortstack[c]{{{dataset_name}}}}} & FID & {" & ".join(cells_content["fid"])} \\\\'
+            f'        \\multirow{{3}}{{*}}{{\\shortstack[c]{{{dataset_name}}}}} & FID $\\downarrow$ & {" & ".join(cells_content["fid"])} \\\\'
         )
-        print(f'         & Precision \\% & {" & ".join(cells_content["precision"])} \\\\')
-        print(f'         & Recall \\% & {" & ".join(cells_content["recall"])} \\\\')
+        print(f'         & Precision \\% $\\uparrow$ & {" & ".join(cells_content["precision"])} \\\\')
+        print(f'         & Recall \\% $\\uparrow$ & {" & ".join(cells_content["recall"])} \\\\')
 
         if i < len(datasets) - 1:
             print("        \\midrule")
@@ -322,10 +324,10 @@ def generate_manifold_stats_table(stats, display_mode):
                 cells_content["recall"].append("-")
 
         print(
-            f'        \\multirow{{3}}{{*}}{{\\shortstack[c]{{\\textbf{{Average}}}}}} & FID & {" & ".join(cells_content["fid"])} \\\\'
+            f'        \\multirow{{3}}{{*}}{{\\shortstack[c]{{\\textbf{{Average}}}}}} & FID $\\downarrow$ & {" & ".join(cells_content["fid"])} \\\\'
         )
-        print(f'         & Precision \\% & {" & ".join(cells_content["precision"])} \\\\')
-        print(f'         & Recall \\% & {" & ".join(cells_content["recall"])} \\\\')
+        print(f'         & Precision \\% $\\uparrow$ & {" & ".join(cells_content["precision"])} \\\\')
+        print(f'         & Recall \\% $\\uparrow$ & {" & ".join(cells_content["recall"])} \\\\')
 
     print("        \\bottomrule")
     print("    \\end{tabular}")
@@ -341,8 +343,9 @@ def generate_stats_table(
     """Generates a LaTeX table from the computed statistics."""
     configs = sorted(
         {config for dataset_results in stats.values() for config in dataset_results.keys()},
-        reverse=True,
+        reverse=False,
     )
+    configs = ["00", "10", "01", "11"]  # Fixed order
     if ref_config is not None and ref_config in configs:
         configs.remove(ref_config)
 
