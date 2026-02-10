@@ -14,7 +14,6 @@ networks/
 out/
 
 # Ignore scripts to run jobs in slurm and outputs
-scripts/
 job_outputs/
 *.err
 *.out
