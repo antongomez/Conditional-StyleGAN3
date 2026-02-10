@@ -211,17 +211,6 @@ class StyleGAN2Loss(Loss):
             else 0
         )
 
-        if phase == "AE":
-            with torch.autograd.profiler.record_function("AE_forward"):
-                logits, _ = self.run_D(real_img, real_c, blur_sigma=blur_sigma, return_latents=True)
-                gen_img, _gen_ws = self.run_G(logits, real_c)
-
-                loss_AE = torch.nn.functional.l1_loss(gen_img, real_img)
-                training_stats.report("Loss/AE/loss", loss_AE)
-            with torch.autograd.profiler.record_function("AE_backward"):
-                loss_AE.mean().mul(gain).backward()
-            return
-
         # Gmain: Maximize logits for generated images.
         if phase in ["Gmain", "Gboth"]:
             with torch.autograd.profiler.record_function("Gmain_forward"):
@@ -419,6 +408,99 @@ class StyleGAN2Loss(Loss):
         # in main loop, we will set requires_grad to True
         self.D.train().requires_grad_(False)
         self.G.train().requires_grad_(False)
+
+
+# ----------------------------------------------------------------------------
+
+
+class ClassifierLoss(Loss):
+    """Simplified loss for training a classifier without adversarial training."""
+
+    def __init__(
+        self,
+        device,
+        classifier,
+        augment_pipe=None,
+        label_map=None,
+    ):
+        super().__init__()
+        self.device = device
+        self.classifier = classifier
+        self.augment_pipe = augment_pipe
+        self.label_map = label_map
+
+    def run_classifier(self, img, c):
+        """Run classifier on images with optional augmentation."""
+        if self.augment_pipe is not None:
+            img = self.augment_pipe(img)
+        _, classification_logits = self.classifier(img, c)
+        return classification_logits
+
+    def accumulate_gradients(self, real_img, real_c):
+        """Accumulate gradients for classifier training."""
+        with torch.autograd.profiler.record_function("Classifier_forward"):
+            real_logits = self.run_classifier(real_img, real_c)
+
+            # Compute classification loss
+            loss_cls = torch.nn.functional.cross_entropy(real_logits, real_c.argmax(dim=1))
+            training_stats.report("Loss/Classifier/classification", loss_cls)
+
+            # Compute and report accuracy per class
+            results_per_class = compute_class_prediction_accuracy(real_logits, real_c, label_map=self.label_map)
+            for cls, classification_tensor in results_per_class.items():
+                training_stats.report(f"Accuracy/train/{cls}", classification_tensor)
+
+            # Compute confusion matrix
+            confusion_matrix_dict = compute_confusion_matrix_dict(
+                real_logits, real_c, type="real", label_map=self.label_map
+            )
+            for key, confusion_tensor in confusion_matrix_dict.items():
+                training_stats.report(key, confusion_tensor)
+
+        with torch.autograd.profiler.record_function("Classifier_backward"):
+            loss_cls.mean().backward()
+
+    def evaluate_classifier(self, real_img, real_c, batch_size=None):
+        """Evaluate classifier on validation data."""
+        if batch_size is not None:
+            assert real_img.shape[0] <= batch_size, "Batch size must be equal or larger than the number of images."
+            assert real_c.shape[0] <= batch_size, "Batch size must be equal or larger than the number of images."
+
+        actual_batch_size = real_img.shape[0]
+        if batch_size is not None and actual_batch_size < batch_size:
+            # Pad if last batch is smaller
+            pad_size = batch_size - actual_batch_size
+            pad_images = torch.zeros((pad_size, *real_img.shape[1:]), dtype=real_img.dtype, device=real_img.device)
+            real_img = torch.cat([real_img, pad_images], dim=0)
+            pad_c = torch.zeros((pad_size, *real_c.shape[1:]), dtype=real_c.dtype, device=real_c.device)
+            real_c = torch.cat([real_c, pad_c], dim=0)
+
+        self.classifier.eval()
+        with torch.no_grad():
+            _, real_logits = self.classifier(real_img, real_c)
+
+            # Remove padded elements before computing metrics
+            if batch_size is not None and actual_batch_size < batch_size:
+                real_logits = real_logits[:actual_batch_size]
+                real_c = real_c[:actual_batch_size]
+
+            # Compute accuracy per class
+            results_per_class = compute_class_prediction_accuracy(real_logits, real_c, label_map=self.label_map)
+            for cls, classification_tensor in results_per_class.items():
+                training_stats.report(f"Accuracy/val/{cls}", classification_tensor)
+
+            # Compute confusion matrix
+            confusion_matrix_dict = compute_confusion_matrix_dict(
+                real_logits, real_c, type="val", label_map=self.label_map
+            )
+            for key, confusion_tensor in confusion_matrix_dict.items():
+                training_stats.report(key, confusion_tensor)
+
+            # Compute loss
+            loss_cls = torch.nn.functional.cross_entropy(real_logits, real_c.argmax(dim=1))
+            training_stats.report("Loss/Classifier/classification/val", loss_cls)
+
+        self.classifier.train().requires_grad_(False)
 
 
 # ----------------------------------------------------------------------------

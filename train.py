@@ -20,12 +20,12 @@ import torch
 import dnnlib
 from metrics import metric_main
 from torch_utils import custom_ops, training_stats
-from training import training_loop
+from training import training_loop, training_loop_classifier
 
 # ----------------------------------------------------------------------------
 
 
-def subprocess_fn(rank, c, temp_dir):
+def subprocess_fn(rank, c, temp_dir, only_classifier=False):
     dnnlib.util.Logger(file_name=os.path.join(c.run_dir, "log.txt"), file_mode="a", should_flush=True)
 
     # Init torch.distributed.
@@ -48,14 +48,17 @@ def subprocess_fn(rank, c, temp_dir):
     if rank != 0:
         custom_ops.verbosity = "none"
 
-    # Execute training loop.
-    training_loop.training_loop(rank=rank, **c)
+    # Execute training loop.+
+    if only_classifier:
+        training_loop_classifier.training_loop_classifier(rank=rank, **c)
+    else:
+        training_loop.training_loop(rank=rank, **c)
 
 
 # ----------------------------------------------------------------------------
 
 
-def launch_training(c, desc, outdir, dry_run):
+def launch_training(c, desc, outdir, dry_run, only_classifier=False):
     dnnlib.util.Logger(should_flush=True)
 
     # Pick output directory.
@@ -105,9 +108,9 @@ def launch_training(c, desc, outdir, dry_run):
     torch.multiprocessing.set_start_method("spawn")
     with tempfile.TemporaryDirectory() as temp_dir:
         if c.num_gpus == 1:
-            subprocess_fn(rank=0, c=c, temp_dir=temp_dir)
+            subprocess_fn(rank=0, c=c, temp_dir=temp_dir, only_classifier=only_classifier)
         else:
-            torch.multiprocessing.spawn(fn=subprocess_fn, args=(c, temp_dir), nprocs=c.num_gpus)
+            torch.multiprocessing.spawn(fn=subprocess_fn, args=(c, temp_dir, only_classifier), nprocs=c.num_gpus)
 
 
 # ----------------------------------------------------------------------------
@@ -169,6 +172,7 @@ def parse_comma_separated_list(s):
 @click.option('--autoen-patience',  help='Autoencoder early stopping patience in ticks', metavar='INT',     type=click.IntRange(min=0), default=0, show_default=True)
 @click.option('--autoen-min-delta', help='Autoencoder early stopping min delta',         metavar='FLOAT',   type=click.FloatRange(min=0), default=0.0, show_default=True)
 @click.option('--judge-model-path', help='Path to the judge model for manifold metrics', metavar='PATH', type=str, default=None, show_default=True)
+@click.option('--only-classifier', help='Train only the classifier (no generator)', metavar='BOOL', type=bool, default=False, show_default=True)
 
 # Memory save arguments
 @click.option('--save-all-snaps',help='Save all snapshots during training',        metavar='BOOL',  type=bool, default=False, show_default=True)
@@ -348,7 +352,7 @@ def main(**kwargs):
         desc += f'-{opts.desc}'
 
     # Launch.
-    launch_training(c=c, desc=desc, outdir=opts.outdir, dry_run=opts.dry_run)
+    launch_training(c=c, desc=desc, outdir=opts.outdir, dry_run=opts.dry_run, only_classifier=opts.only_classifier)
     # fmt: on
 
 

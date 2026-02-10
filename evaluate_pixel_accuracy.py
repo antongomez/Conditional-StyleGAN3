@@ -14,6 +14,7 @@ from pathlib import Path
 
 import dnnlib
 from multispectral_utils import (
+    build_classifier,
     build_dataset,
     build_discriminator,
     calculate_pixel_accuracy,
@@ -113,7 +114,9 @@ def write_report(output_dir, filename, OA, AA, class_accuracies, execution_time,
     print(f"Report saved to: {report_path}")
 
 
-def compare_optimization_methods(input_dir, output_dir, filename, split_format, dataloader, D, device, label_map=None):
+def compare_optimization_methods(
+    input_dir, output_dir, filename, split_format, dataloader, model, device, label_map=None
+):
     """
     Compare execution times of different optimization methods.
 
@@ -123,7 +126,7 @@ def compare_optimization_methods(input_dir, output_dir, filename, split_format, 
         filename (str): Base filename
         split_format (str): Format for split information
         dataloader: Data loader iterator
-        D: Discriminator model
+        model: Classifier model (discriminator or classifier)
         device: Device to run on
 
     Returns:
@@ -151,7 +154,7 @@ def compare_optimization_methods(input_dir, output_dir, filename, split_format, 
             filename=filename,
             split_format=split_format,
             dataloader=dataloader,
-            D=D,
+            model=model,
             device=device,
             label_map=label_map,
             show_progress=True,
@@ -369,6 +372,9 @@ def main():
     # Mode selection
     parser.add_argument("--write-report", action="store_true", help="Write evaluation results to a report file")                                               
     parser.add_argument("--output-csv", type=str, default="results.csv", help="Output CSV filename for results (default: results.csv)")
+
+    # Network type (GAN or classifier)
+    parser.add_argument("--model-type", type=str, default="gan", choices=["gan", "classifier"], help="Type of model to evaluate (default: gan)")
     # fmt: on
 
     args = parser.parse_args()
@@ -393,7 +399,10 @@ def main():
         )
 
     # Load discriminator
-    D, device = build_discriminator(args.network_pkl)
+    if args.model_type == "classifier":
+        model, device = build_classifier(args.network_pkl)
+    else:
+        model, device = build_discriminator(args.network_pkl)
 
     # Initialize dataset
     test_set_kwargs, _ = init_dataset_kwargs(data=args.data_zip)
@@ -414,7 +423,7 @@ def main():
         filename=args.filename,
         split_format=args.split_format,
         dataloader=test_dataloader,
-        D=D,
+        model=model,
         device=device,
         label_map=test_dataset.get_label_map(),
         show_progress=True,

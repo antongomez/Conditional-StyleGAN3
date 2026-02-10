@@ -1,4 +1,6 @@
+import copy
 import os
+import pickle
 
 import numpy as np
 import torch
@@ -6,6 +8,7 @@ from tqdm import tqdm
 
 import dnnlib
 import legacy
+from torch_utils import misc
 
 from .data_readers import load_multispectral_dataset
 from .data_splitter import load_split_info
@@ -44,6 +47,40 @@ def build_discriminator(network_pkl: str, device: str = "cuda"):
     D.eval()
     print("Done.")
     return D, device
+
+
+def load_network_pkl(f, force_fp16=False):
+    data = pickle.Unpickler(f).load()
+
+    # Validate contents.
+    assert isinstance(data["classifier"], torch.nn.Module)
+
+    # Force FP16.
+    if force_fp16:
+        old = data["classifier"]
+        kwargs = copy.deepcopy(old.init_kwargs)
+        fp16_kwargs = kwargs.get("synthesis_kwargs", kwargs)
+        fp16_kwargs.num_fp16_res = 4
+        fp16_kwargs.conv_clamp = 256
+        if kwargs != old.init_kwargs:
+            new = type(old)(**kwargs).eval().requires_grad_(False)
+            misc.copy_params_and_buffers(old, new, require_all=True)
+            data["classifier"] = new
+    return data
+
+
+# ----------------------------------------------------------------------------
+
+
+def build_classifier(network_pkl: str, device: str = "cuda"):
+    """Load a pretrained classifier (StyleGAN discriminator) from a pickle file."""
+    print(f'Loading networks from "{network_pkl}"...', end=" ")
+    device = torch.device(device)
+    with dnnlib.util.open_url(network_pkl) as f:
+        classifier = load_network_pkl(f)["classifier"].to(device)  # type: ignore
+    classifier.eval()
+    print("Done.")
+    return classifier, device
 
 
 def load_dataset_and_split_info(input_dir, output_dir, filename, split_format, read_raw_data=True):
@@ -244,7 +281,7 @@ def compare_pixel_outputs(arr1, arr2, shape=None, save_path=None, max_diff_repor
 
 
 def calculate_pixel_accuracy(
-    input_dir, output_dir, filename, split_format, dataloader, D, device, label_map=None, show_progress=False
+    input_dir, output_dir, filename, split_format, dataloader, model, device, label_map=None, show_progress=False
 ):
     """
     Computes pixel-wise accuracy from classifier predictions over image patches.
@@ -299,7 +336,7 @@ def calculate_pixel_accuracy(
             label_batch = label_batch.to(device)
 
             # Get predictions from discriminator
-            _, classification_logits = D(image_batch, label_batch, update_emas=False)
+            _, classification_logits = model(image_batch, label_batch, update_emas=False)
 
             # Remove padded entries
             if actual_batch_size < batch_size:
@@ -369,7 +406,7 @@ def calculate_pixel_accuracy(
 
 
 def calculate_pixel_accuracy_optimized(
-    input_dir, output_dir, filename, split_format, dataloader, D, device, label_map=None, show_progress=False
+    input_dir, output_dir, filename, split_format, dataloader, model, device, label_map=None, show_progress=False
 ):
     """
     Optimized version of calculate_pixel_accuracy with vectorized operations
@@ -394,7 +431,7 @@ def calculate_pixel_accuracy_optimized(
     num_classes = split_info["split_stats"]["num_classes"]
 
     # 2. Patch predictions
-    predictions = predict_patches_batch(dataloader, D, device, label_map, show_progress)
+    predictions = predict_patches_batch(dataloader, model, device, label_map, show_progress)
 
     # 3. Generate pixel classification map
     pixel_output = generate_pixel_classification_map(
@@ -416,7 +453,7 @@ def calculate_pixel_accuracy_optimized(
 
 # Alternative version with pre-computed masks for greater efficiency
 def calculate_pixel_accuracy_ultra_optimized(
-    input_dir, output_dir, filename, split_format, dataloader, D, device, label_map=None, show_progress=False
+    input_dir, output_dir, filename, split_format, dataloader, model, device, label_map=None, show_progress=False
 ):
     """
     Ultra-optimized version that pre-computes masks and uses fully
@@ -438,7 +475,7 @@ def calculate_pixel_accuracy_ultra_optimized(
     num_classes = split_info["split_stats"]["num_classes"]
 
     # Predictions
-    predictions = predict_patches_batch(dataloader, D, device, label_map, show_progress)
+    predictions = predict_patches_batch(dataloader, model, device, label_map, show_progress)
 
     # Create base map
     pixel_output = np.zeros(image_size, dtype=np.uint8)

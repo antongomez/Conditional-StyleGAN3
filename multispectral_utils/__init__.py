@@ -23,6 +23,7 @@ from .patch_extractor import (
     select_patch,
 )
 from .pixel_evaluation import (
+    build_classifier,
     build_dataset,
     build_discriminator,
     calculate_pixel_accuracy,
@@ -61,6 +62,7 @@ __all__ = [
     "validate_dataset_integrity"
     # Pixel evaluation
     "build_discriminator",
+    "build_classifier",
     "init_dataset_kwargs",
     "build_dataset",
     "calculate_pixel_accuracy",
