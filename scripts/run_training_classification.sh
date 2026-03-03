@@ -25,7 +25,7 @@ SNAP=1
 SAVE_ALL_SNAPS=False
 DRY_RUN=False
 GAMMA=0.125
-NO_EVAL=False
+EVAL_CLASSIFICATION=True
 
 # Parse arguments
 for arg in "$@"; do
@@ -78,8 +78,8 @@ for arg in "$@"; do
       DRY_RUN=True
       shift
       ;;
-    --no-eval)
-      NO_EVAL=True
+    --eval-classification=*)
+      EVAL_CLASIIFICATION="${arg#*=}"
       shift
       ;;
     *)
@@ -188,7 +188,7 @@ echo "  snap                = ${SNAP}"
 echo "  save-all-snaps      = ${SAVE_ALL_SNAPS}"
 echo "  dry-run             = ${DRY_RUN}"
 echo "  gamma               = ${GAMMA}"
-echo "  no-eval             = ${NO_EVAL}"
+echo "  eval-classification = ${EVAL_CLASSIFICATION}"
 if [ ${#OTHER_ARGS[@]} -gt 0 ]; then
   echo "  other args   = ${OTHER_ARGS[*]}"
 else
@@ -264,17 +264,32 @@ else
   SEED=0 # Set SEED to 0 if not provided (evaluate_pixel_accuracy.py requires an integer, put a 0 has the same behaviour as no seed)
 fi
 
-SELECTION_METHOD="best_val_aa"
-CLASSIFICATION_RESULTS_FILE="9_classifier_results.csv"
+#######################################
+############# EVALUATION ##############
+#######################################
 
-# Run the evaluation command for each network
-python evaluate_pixel_accuracy.py \
-    --experiment-dir="$EXPERIMENT_DIR" \
-    --input-path="$INPUT_PATH" \
-    --filename="$FILENAME" \
-    --dataset-seed="$SEED" \
-    --data-zip="$DATA_TEST_ZIP" \
-    --selection-method="$SELECTION_METHOD" \
-    --output-csv="$CLASSIFICATION_RESULTS_FILE" \
-    --model-type="classifier" 
+SELECTION_METHOD="best_val_aa"
+CLASSIFICATION_RESULTS_FILE="0_aa_lambda_results.csv"
+
+EXPERIMENT_DIR="$run_dir"
+if [ -n "$SEED" ]; then
+  DATA_TEST_ZIP="data/${FILENAME}/${FILENAME}_test_${SEED}.zip"
+else
+  DATA_TEST_ZIP="data/${FILENAME}/${FILENAME}_test.zip"
+  SEED=0 # Set SEED to 0 if not provided (evaluate_pixel_accuracy.py requires an integer, put a 0 has the same behaviour as no seed)
+fi
+
+if [[ "${EVAL_CLASSIFICATION,,}" == "true" ]]; then
+  python evaluate_pixel_accuracy.py \
+      --experiment-dir="$EXPERIMENT_DIR" \
+      --input-path="$INPUT_PATH" \
+      --filename="$FILENAME" \
+      --dataset-seed="$SEED" \
+      --data-zip="$DATA_TEST_ZIP" \
+      --selection-method="$SELECTION_METHOD" \
+      --output-csv="$CLASSIFICATION_RESULTS_FILE"
+else
+  echo "Classification evaluation skipped as per --no-eval-classification flag."
+fi
+
   

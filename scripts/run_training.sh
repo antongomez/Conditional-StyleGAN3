@@ -115,16 +115,16 @@ for arg in "$@"; do
       DRY_RUN=True
       shift
       ;;
-    --eval-manifold)
-      EVAL_MANIFOLD=True
+    --eval-manifold=*)
+      EVAL_MANIFOLD="${arg#*=}"
       shift
       ;;
-    --eval-classification)
-      EVAL_CLASSIFICATION=True
+    --eval-classification=*)
+      EVAL_CLASSIFICATION="${arg#*=}"
       shift
       ;;
-    --join-results)
-      JOIN_RESULTS=True
+    --join-results=*)
+      JOIN_RESULTS="${arg#*=}"
       shift
       ;;
     *)
@@ -314,21 +314,25 @@ python train.py --outdir="$OUTDIR" --cfg="$CFG" --cond=True --gamma=0.125  \
 
 echo ">>> Training completed. Models and logs are saved in: $run_dir"
 
-# Run evaluation if not disabled
+
+#######################################
+############# EVALUATION ##############
+#######################################
+
+SELECTION_METHOD="best_val_aa"
+MANIFOLD_RESULTS_FILE="0_aa_lambda_manifold_results.csv"
+CLASSIFICATION_RESULTS_FILE="0_aa_lambda_results.csv"
+JOINED_RESULTS_FILE="0_aa_lambda.csv"
+
+EXPERIMENT_DIR="$run_dir"
+if [ -n "$SEED" ]; then
+  DATA_TEST_ZIP="data/${FILENAME}/${FILENAME}_test_${SEED}.zip"
+else
+  DATA_TEST_ZIP="data/${FILENAME}/${FILENAME}_test.zip"
+  SEED=0 # Set SEED to 0 if not provided (evaluate_pixel_accuracy.py requires an integer, put a 0 has the same behaviour as no seed)
+fi
+
 if [[ "${EVAL_MANIFOLD,,}" == "true" ]]; then
-  EXPERIMENT_DIR="$run_dir"
-  if [ -n "$SEED" ]; then
-    DATA_TEST_ZIP="data/${FILENAME}/${FILENAME}_test_${SEED}.zip"
-  else
-    DATA_TEST_ZIP="data/${FILENAME}/${FILENAME}_test.zip"
-    SEED=0 # Set SEED to 0 if not provided (evaluate_pixel_accuracy.py requires an integer, put a 0 has the same behaviour as no seed)
-  fi
-
-  SELECTION_METHOD="best_val_aa"
-  MANIFOLD_RESULTS_FILE="0_aa_lambda_manifold_results.csv"
-  CLASSIFICATION_RESULTS_FILE="0_aa_lambda_results.csv"
-
-  # Run the manifold metrics evaluation
   python calculate_manifold_metrics.py \
       --experiment-dir="$EXPERIMENT_DIR" \
       --input-path="$INPUT_PATH" \
@@ -342,7 +346,6 @@ else
 fi
 
 if [[ "${EVAL_CLASSIFICATION,,}" == "true" ]]; then
-  # Run the evaluation command for each network
   python evaluate_pixel_accuracy.py \
       --experiment-dir="$EXPERIMENT_DIR" \
       --input-path="$INPUT_PATH" \
@@ -356,7 +359,6 @@ else
 fi
 
 [[ "${JOIN_RESULTS,,}" == "true" ]]; then
-  JOINED_RESULTS_FILE="joined_results.csv"
   python scripts/join.py \
       --csv1="$CLASSIFICATION_RESULTS_FILE" \
       --csv2="$MANIFOLD_RESULTS_FILE" \
@@ -364,6 +366,3 @@ fi
 else
     echo "Skipping joining of results."
 fi
-
-exit 0
-##############
