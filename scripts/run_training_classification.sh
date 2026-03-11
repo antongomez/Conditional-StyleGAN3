@@ -250,23 +250,15 @@ python train.py --outdir="$OUTDIR" --cfg="$CFG" --cond=True --gamma=0.125  \
 
 echo ">>> Training completed. Models and logs are saved in: $run_dir"
 
+#######################################
+############# EVALUATION ##############
+#######################################
+
 # Run evaluation if not disabled
 if [[ "${NO_EVAL,,}" == "true" ]]; then
   echo "Evaluation skipped as per --no-evaluation flag."
   exit 0
 fi
-
-EXPERIMENT_DIR="$run_dir"
-if [ -n "$SEED" ]; then
-  DATA_TEST_ZIP="data/${FILENAME}/${FILENAME}_test_${SEED}.zip"
-else
-  DATA_TEST_ZIP="data/${FILENAME}/${FILENAME}_test.zip"
-  SEED=0 # Set SEED to 0 if not provided (evaluate_pixel_accuracy.py requires an integer, put a 0 has the same behaviour as no seed)
-fi
-
-#######################################
-############# EVALUATION ##############
-#######################################
 
 SELECTION_METHOD="best_val_aa"
 CLASSIFICATION_RESULTS_FILE="0_aa_lambda_results.csv"
@@ -287,7 +279,9 @@ if [[ "${EVAL_CLASSIFICATION,,}" == "true" ]]; then
       --dataset-seed="$SEED" \
       --data-zip="$DATA_TEST_ZIP" \
       --selection-method="$SELECTION_METHOD" \
-      --output-csv="$CLASSIFICATION_RESULTS_FILE"
+      --output-csv="$CLASSIFICATION_RESULTS_FILE" \
+      --model-type="classifier"
+      
 else
   echo "Classification evaluation skipped as per --no-eval-classification flag."
 fi
