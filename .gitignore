@@ -35,3 +35,4 @@ oitaven_judge*.pth
 
 sota_comparison/
 scripts/run_job*.sh
+stylegan3_singularity/
