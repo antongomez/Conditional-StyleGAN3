@@ -156,18 +156,7 @@ if [ "$EPOCHS" -gt 0 ]; then
 
   NUM_KIMG=$(( NUM_IMAGES  * EPOCHS / 1000 ))
   echo "* Calculated kimg: $NUM_KIMG (for $EPOCHS epochs)"
-
-  if [ "$AUTOEN_EPOCHS" -gt 0 ]; then
-    AUTOEN_KIMG=$(( NUM_IMAGES  * AUTOEN_EPOCHS / 1000 ))
-    echo ">>> Auto kimg for adversarial training: $AUTOEN_KIMG (for $AUTOEN_EPOCHS epochs)"
-    if [ "$AUTOEN_KIMG" -gt "$NUM_KIMG" ]; then
-      echo ">>> Warning: Auto kimg ($AUTOEN_KIMG) is greater than total kimg ($NUM_KIMG). Adjusting auto kimg to total kimg."
-      AUTOEN_KIMG=$NUM_KIMG
-    fi
-  else 
-    AUTOEN_KIMG=0
-  fi
-
+  
 else
   NUM_KIMG=1500  # Default value
   echo ">>> Using default kimg: $NUM_KIMG"

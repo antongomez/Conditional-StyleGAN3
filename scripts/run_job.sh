@@ -3,13 +3,38 @@
 # ─── Default values ──────────────────────────────────────────────────
 
 EPOCHS=400
-FILENAME="oitaven"
+FILENAME="ulla"
 
 GPUS=1
 BATCH=128
-BATCH_GPU=64
+BATCH_GPU=128
 
 SEED=42
+
+# ─── Parse arguments ──────────────────────────────────────────────────
+
+for arg in "$@"; do
+  case $arg in
+    --filename=*)
+      FILENAME="${arg#*=}"
+      ;;
+    --seed=*)
+      SEED="${arg#*=}"
+      ;;
+    --epochs=*)
+      EPOCHS="${arg#*=}"
+      ;;
+    --gpus=*)
+      GPUS="${arg#*=}"
+      ;;
+    --batch=*)
+      BATCH="${arg#*=}"
+      ;;
+    --batch-gpu=*)
+      BATCH_GPU="${arg#*=}"
+      ;;
+  esac
+done
 
 # ─── Setup Logs & Paths ──────────────────────────────────────────────
 
@@ -25,7 +50,7 @@ WORK_DIR=$(pwd)
 
 # ─── Command ──────────────────────────────────────────────────────────
 
-CMD="apptainer exec --nv --bind ${WORK_DIR}:/workspace --pwd /workspace ${SIF_IMAGE} \
+CMD="apptainer exec --nv --bind ${WORK_DIR}:/workspace --bind /usr/local/cuda-12.9:/usr/local/cuda --pwd /workspace ${SIF_IMAGE} \
 bash scripts/run_training_classification.sh \
 --cfg=stylegan3-t \
 --epochs=${EPOCHS} \
