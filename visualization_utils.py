@@ -41,6 +41,8 @@ def extract_metrics(jsonl_data, class_labels):
         "Loss/D/reg",
         "Loss/AE/loss",
         "Loss/AE/val/loss",
+        "Loss/Classifier/score",
+        "Loss/Classifier/score/val",
         "Progress/tick",
         "Progress/kimg",
         "Progress/autoencoder_kimg",

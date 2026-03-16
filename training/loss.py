@@ -443,12 +443,12 @@ class ClassifierLoss(Loss):
 
             # Compute classification loss
             loss_cls = torch.nn.functional.cross_entropy(real_logits, real_c.argmax(dim=1))
-            training_stats.report("Loss/Classifier/classification", loss_cls)
+            training_stats.report("Loss/Classifier/score", loss_cls)
 
             # Compute and report accuracy per class
             results_per_class = compute_class_prediction_accuracy(real_logits, real_c, label_map=self.label_map)
             for cls, classification_tensor in results_per_class.items():
-                training_stats.report(f"Accuracy/train/{cls}", classification_tensor)
+                training_stats.report(f"Accuracy/real/{cls}", classification_tensor)
 
             # Compute confusion matrix
             confusion_matrix_dict = compute_confusion_matrix_dict(
@@ -498,7 +498,7 @@ class ClassifierLoss(Loss):
 
             # Compute loss
             loss_cls = torch.nn.functional.cross_entropy(real_logits, real_c.argmax(dim=1))
-            training_stats.report("Loss/Classifier/classification/val", loss_cls)
+            training_stats.report("Loss/Classifier/score/val", loss_cls)
 
         self.classifier.train().requires_grad_(False)
 
