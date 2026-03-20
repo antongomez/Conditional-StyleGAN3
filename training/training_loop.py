@@ -470,6 +470,8 @@ def training_loop(
     tick_start_time = time.time()
     maintenance_time = tick_start_time - start_time
     batch_idx = 0
+    midpoint_saved = False
+    midpoint_checkpoint = 0.5 * total_kimg * 1000
     if progress_fn is not None:
         progress_fn(0, total_kimg)
     while True:
@@ -855,8 +857,14 @@ def training_loop(
         if (
             (rank == 0)
             and (image_snapshot_ticks is not None)
-            and (done or cur_tick % image_snapshot_ticks == 0)
-            and (save_all_fakes or is_aa_best_so_far or is_fid_best_so_far or done)
+            and (cur_tick % image_snapshot_ticks == 0 or done)
+            and (
+                save_all_fakes
+                or is_aa_best_so_far
+                or is_fid_best_so_far
+                or done
+                or (not midpoint_saved and cur_nimg >= midpoint_checkpoint)
+            )
         ):
             images = torch.cat(
                 [G_ema(z=z, c=c, noise_mode="const").cpu() for z, c in zip(latent_tensor, label_tensor)]
@@ -890,7 +898,13 @@ def training_loop(
         if (
             network_snapshot_ticks is not None
             and (cur_tick % network_snapshot_ticks == 0 or done)
-            and (save_all_snaps or is_aa_best_so_far or is_fid_best_so_far or done)
+            and (
+                save_all_snaps
+                or is_aa_best_so_far
+                or is_fid_best_so_far
+                or done
+                or (not midpoint_saved and cur_nimg >= midpoint_checkpoint)
+            )
         ):
             snapshot_data = dict(
                 G=G, D=D, G_ema=G_ema, augment_pipe=augment_pipe, training_set_kwargs=dict(training_set_kwargs)

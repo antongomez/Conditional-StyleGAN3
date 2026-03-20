@@ -41,3 +41,5 @@ scripts/run_all_experiments.sh
 sota_comparison/
 scripts/run_job*.sh
 stylegan3_singularity/
+
+CLAUDE.md

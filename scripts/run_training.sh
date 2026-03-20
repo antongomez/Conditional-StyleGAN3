@@ -320,9 +320,9 @@ echo ">>> Training completed. Models and logs are saved in: $run_dir"
 #######################################
 
 SELECTION_METHOD="best_val_aa"
-MANIFOLD_RESULTS_FILE="0_aa_lambda_manifold_results.csv"
-CLASSIFICATION_RESULTS_FILE="0_aa_lambda_results.csv"
-JOINED_RESULTS_FILE="0_aa_lambda.csv"
+MANIFOLD_RESULTS_FILE="4_generation_manifold.csv"
+CLASSIFICATION_RESULTS_FILE="4_generation_classification.csv"
+JOINED_RESULTS_FILE="4_generation.csv"
 
 EXPERIMENT_DIR="$run_dir"
 if [ -n "$SEED" ]; then
@@ -358,7 +358,7 @@ else
   echo "Classification evaluation skipped as per --no-eval-classification flag."
 fi
 
-[[ "${JOIN_RESULTS,,}" == "true" ]]; then
+if [[ "${JOIN_RESULTS,,}" == "true" ]]; then
   python scripts/join.py \
       --csv1="$CLASSIFICATION_RESULTS_FILE" \
       --csv2="$MANIFOLD_RESULTS_FILE" \
