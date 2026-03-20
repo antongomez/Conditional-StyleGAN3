@@ -2,6 +2,10 @@
 """
 Script to join two CSV files using a join on key columns.
 Fills missing rows in one of the datasets with 0s.
+
+The operation is detected automatically from the column structure:
+  concat - if the extra columns of one file are a subset of the other's
+  join   - if both files have disjoint extra columns
 """
 
 import argparse
@@ -10,17 +14,95 @@ import sys
 
 import pandas as pd
 
+BASE_COLUMNS = {
+    "experiment_name",
+    "dataset",
+    "uniform_class",
+    "disc_on_gen",
+    "autoencoder_epochs",
+    "classification_weight",
+    "best_tick_kimg",
+}
 
-def join_csvs(csv1_path, csv2_path, output_path):
+
+def _read_and_normalise(path):
+    """Read a CSV and convert experiment_name to basename."""
+    print(f"Reading {path}...")
+    df = pd.read_csv(path)
+    if "experiment_name" in df.columns:
+        print("Converting experiment_name to basename...")
+        df["experiment_name"] = df["experiment_name"].apply(
+            lambda x: os.path.basename(str(x))
+        )
+    return df
+
+
+def _sort_dataframe(df):
+    """Sort dataframe by the standard columns, handling boolean conversions."""
+    sort_columns = [
+        "dataset",
+        "uniform_class",
+        "disc_on_gen",
+        "classification_weight",
+        "experiment_name",
+    ]
+    sort_columns = [col for col in sort_columns if col in df.columns]
+
+    if "uniform_class" in df.columns:
+        df["uniform_class"] = (
+            df["uniform_class"]
+            .astype(str)
+            .str.strip()
+            .map({"True": True, "False": False, "1": True, "0": False, "1.0": True, "0.0": False})
+        )
+    if "disc_on_gen" in df.columns:
+        df["disc_on_gen"] = (
+            df["disc_on_gen"]
+            .astype(str)
+            .str.strip()
+            .map({"True": True, "False": False, "1": True, "0": False, "1.0": True, "0.0": False})
+        )
+
+    ascending = [True] * len(sort_columns)
+    # uniform_class and disc_on_gen descending (True before False)
+    for i, col in enumerate(sort_columns):
+        if col in ("uniform_class", "disc_on_gen"):
+            ascending[i] = False
+
+    print("Sorting the dataframe...")
+    return df.sort_values(by=sort_columns, ascending=ascending)
+
+
+def concat_csvs(df1, df2, output_path):
     """
-    Joins two CSV files using an outer join on key columns.
+    Concatenates two DataFrames by stacking rows vertically.
+    Columns absent in one file (e.g. generation metrics) are filled with null
+    automatically by pd.concat.
+    """
+    print("Concatenating rows...")
+    df_merged = pd.concat([df1, df2], ignore_index=True)
+
+    df_merged = _sort_dataframe(df_merged)
+
+    print(f"Saving result to {output_path}...")
+    df_merged.to_csv(output_path, index=False)
+
+    print("Concat completed successfully!")
+    print(f"  - Rows in CSV1: {len(df1)}")
+    print(f"  - Rows in CSV2: {len(df2)}")
+    print(f"  - Rows in result: {len(df_merged)}")
+    print(f"  - Columns in result: {len(df_merged.columns)}")
+
+
+def join_csvs(df1, df2, output_path):
+    """
+    Joins two DataFrames using an outer join on key columns.
 
     Args:
-        csv1_path: Path to the first CSV file
-        csv2_path: Path to the second CSV file
+        df1: First DataFrame (already loaded and normalised)
+        df2: Second DataFrame (already loaded and normalised)
         output_path: Path to the output CSV file
     """
-    # Key columns for the join
     key_columns = [
         "experiment_name",
         "dataset",
@@ -30,101 +112,57 @@ def join_csvs(csv1_path, csv2_path, output_path):
         "classification_weight",
     ]
 
-    try:
-        # Read the CSV files
-        print(f"Reading {csv1_path}...")
-        df1 = pd.read_csv(csv1_path)
+    # Verify that the key columns exist in both dataframes
+    for col in key_columns:
+        if col not in df1.columns:
+            print(f"ERROR: Column '{col}' does not exist in CSV1")
+            sys.exit(1)
+        if col not in df2.columns:
+            print(f"ERROR: Column '{col}' does not exist in CSV2")
+            sys.exit(1)
 
-        print(f"Reading {csv2_path}...")
-        df2 = pd.read_csv(csv2_path)
+    # Perform an outer join to keep all rows from both datasets
+    print("Performing the join...")
+    df_merged = pd.merge(df1, df2, on=key_columns, how="outer", suffixes=("", "_dup"))
 
-        # Convert experiment_name to basename in both dataframes
-        if "experiment_name" in df1.columns:
-            print("Converting experiment_name to basename in CSV1...")
-            df1["experiment_name"] = df1["experiment_name"].apply(lambda x: os.path.basename(str(x)))
+    # Fill missing values with 0s
+    print("Filling missing values with 0s...")
+    df_merged = df_merged.fillna(0)
 
-        if "experiment_name" in df2.columns:
-            print("Converting experiment_name to basename in CSV2...")
-            df2["experiment_name"] = df2["experiment_name"].apply(lambda x: os.path.basename(str(x)))
+    # Remove duplicate columns if they exist
+    df_merged = df_merged.loc[:, ~df_merged.columns.str.endswith("_dup")]
 
-        # Verify that the key columns exist in both dataframes
-        for col in key_columns:
-            if col not in df1.columns:
-                print(f"ERROR: Column '{col}' does not exist in {csv1_path}")
-                sys.exit(1)
-            if col not in df2.columns:
-                print(f"ERROR: Column '{col}' does not exist in {csv2_path}")
-                sys.exit(1)
+    df_merged = _sort_dataframe(df_merged)
 
-        # Perform an outer join to keep all rows from both datasets
-        print("Performing the join...")
-        df_merged = pd.merge(df1, df2, on=key_columns, how="outer", suffixes=("", "_dup"))
+    print(f"Saving result to {output_path}...")
+    df_merged.to_csv(output_path, index=False)
 
-        # Fill missing values with 0s
-        print("Filling missing values with 0s...")
-        df_merged = df_merged.fillna(0)
+    print("Join completed successfully!")
+    print(f"  - Rows in CSV1: {len(df1)}")
+    print(f"  - Rows in CSV2: {len(df2)}")
+    print(f"  - Rows in result: {len(df_merged)}")
+    print(f"  - Columns in result: {len(df_merged.columns)}")
 
-        # Remove duplicate columns if they exist
-        df_merged = df_merged.loc[:, ~df_merged.columns.str.endswith("_dup")]
 
-        # Sort the dataframe
-        print("Sorting the dataframe...")
-        sort_columns = [
-            "dataset",
-            "uniform_class",
-            "disc_on_gen",
-            "classification_weight",
-            "experiment_name",
-        ]
-        # Make sure the sort columns exist
-        for col in sort_columns:
-            if col not in df_merged.columns:
-                print(f"WARNING: Sort column '{col}' does not exist in the dataframe. Skipping.")
-                sort_columns.remove(col)
+def detect_mode(df1, df2):
+    """
+    Detect whether to concat or join based on extra (non-base) columns.
 
-        # Convert boolean columns to sort correctly
-        if "uniform_class" in df_merged.columns:
-            df_merged["uniform_class"] = (
-                df_merged["uniform_class"]
-                .astype(str)
-                .str.strip()
-                .map({"True": True, "False": False, "1": True, "0": False, "1.0": True, "0.0": False})
-            )
-        if "disc_on_gen" in df_merged.columns:
-            df_merged["disc_on_gen"] = (
-                df_merged["disc_on_gen"]
-                .astype(str)
-                .str.strip()
-                .map({"True": True, "False": False, "1": True, "0": False, "1.0": True, "0.0": False})
-            )
+    Returns 'concat' if the extra columns of one file are a subset of the
+    other's extra columns; returns 'join' if both files have disjoint extras.
+    """
+    extra1 = set(df1.columns) - BASE_COLUMNS
+    extra2 = set(df2.columns) - BASE_COLUMNS
 
-        df_merged = df_merged.sort_values(
-            by=sort_columns,
-            ascending=[True, False, False, True, True],
-        )
-
-        # Save the result
-        print(f"Saving result to {output_path}...")
-        df_merged.to_csv(output_path, index=False)
-
-        print(f"✓ Join completed successfully!")
-        print(f"  - Rows in CSV1: {len(df1)}")
-        print(f"  - Rows in CSV2: {len(df2)}")
-        print(f"  - Rows in result: {len(df_merged)}")
-        print(f"  - Columns in result: {len(df_merged.columns)}")
-
-    except FileNotFoundError as e:
-        print(f"ERROR: File not found: {e}")
-        sys.exit(1)
-    except Exception as e:
-        print(f"ERROR: {e}")
-        sys.exit(1)
+    if extra1 <= extra2 or extra2 <= extra1:
+        return "concat"
+    return "join"
 
 
 def main():
-    """Main function that processes arguments and executes the join."""
+    """Main function that processes arguments and executes the join or concat."""
     parser = argparse.ArgumentParser(
-        description="Joins two CSV files using a join on key columns.",
+        description="Joins or concatenates two CSV files (operation is auto-detected).",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument("--csv1", "-1", type=str, required=True, help="Path to the first CSV file")
@@ -132,8 +170,16 @@ def main():
     parser.add_argument("--output", "-o", type=str, required=True, help="Path to the output CSV file")
     args = parser.parse_args()
 
-    # Execute the join
-    join_csvs(args.csv1, args.csv2, args.output)
+    df1 = _read_and_normalise(args.csv1)
+    df2 = _read_and_normalise(args.csv2)
+
+    mode = detect_mode(df1, df2)
+    print(f"Auto-detected mode: {mode}")
+
+    if mode == "concat":
+        concat_csvs(df1, df2, args.output)
+    else:
+        join_csvs(df1, df2, args.output)
 
 
 if __name__ == "__main__":

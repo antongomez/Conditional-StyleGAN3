@@ -16,6 +16,7 @@ dataset_names_map = {
 }
 
 config_to_header_map = {
+    "baseline": ("Baseline",),
     "00": ("Original Dist.", "Real Only"),
     "01": ("Original Dist.", "Real + Syn."),
     "10": ("Balanced Dist.", "Real Only"),
@@ -341,11 +342,10 @@ def generate_stats_table(
     pvalue_threshold=0.05,
 ):
     """Generates a LaTeX table from the computed statistics."""
-    configs = sorted(
-        {config for dataset_results in stats.values() for config in dataset_results.keys()},
-        reverse=False,
-    )
+    all_present = {config for dataset_results in stats.values() for config in dataset_results.keys()}
     configs = ["00", "10", "01", "11"]  # Fixed order
+    if "baseline" in all_present:
+        configs = ["baseline"] + configs
     if ref_config is not None and ref_config in configs:
         configs.remove(ref_config)
 
@@ -482,6 +482,12 @@ def complete_df_with_seed_and_config(df):
     df["seed"] = df["experiment_name"].apply(extract_seed)
     df["seed"] = df["seed"].astype(int)
     df["config"] = df["uniform_class"].astype(int).astype(str) + df["disc_on_gen"].astype(int).astype(str)
+    baseline_mask = (
+        (df["classification_weight"] == 0.0)
+        & (df["uniform_class"].astype(int) == 0)
+        & (df["disc_on_gen"].astype(int) == 0)
+    )
+    df.loc[baseline_mask, "config"] = "baseline"
     return df
 
 
@@ -495,6 +501,7 @@ def preprocess_data(csv_path, manifold=False):
 
     df = complete_df_with_seed_and_config(df)
     if manifold:
+        df = df[df["config"] != "baseline"]
         df.dropna(subset=["mean_fid", "mean_precision", "mean_recall"], inplace=True)
     else:
         df.dropna(subset=["oa_test", "aa_test"], inplace=True)
