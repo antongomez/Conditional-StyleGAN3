@@ -290,13 +290,17 @@ def print_accuracies_per_class(data, class_labels, last_ticks=10, data_type="val
     classification_keys = _build_classification_keys(class_labels, data_type=data_type)
     accuracies = [data[metric][-last_ticks:] for metric in classification_keys]
     accuracies = np.array(accuracies)
-    print(f"Last {last_ticks} accuracies per class ({data_type}):")
-    for class_label, acc in zip(class_labels, accuracies):
 
-        print(f"Class {class_label}: {[f'{a:.3f}' for a in acc]}")
-    avg = np.mean(accuracies, axis=0)
-    formatted = [f"{v:.3f}" for v in avg]
-    print(f"Average accuracies over the last {last_ticks} ticks: {formatted}")
+    if any(acc for accs in accuracies for acc in accs):
+      print(f"Last {last_ticks} accuracies per class ({data_type}):")
+      for class_label, acc in zip(class_labels, accuracies):
+
+          print(f"Class {class_label}: {[f'{a:.3f}' for a in acc]}")
+      avg = np.mean(accuracies, axis=0)
+      formatted = [f"{v:.3f}" for v in avg]
+      print(f"Average accuracies over the last {last_ticks} ticks: {formatted}")
+    else:
+       print("No accuracies")
 
 
 def _compute_stats(acc_list, clean_nan):
