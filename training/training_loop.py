@@ -241,6 +241,7 @@ def training_loop(
     abort_fn=None,  # Callback function for determining whether to abort training. Must return consistent results across ranks.
     progress_fn=None,  # Callback function for updating training progress. Called for all ranks.
     uniform_class_labels=False,  # Use uniform class labels for generated images or use the training set distribution?
+    balance_class_labels=False,  # Use generator labels that complement dataset distribution to balance real+gen seen by classifier.
     disc_on_gen=False,  # Whether to run the discriminator on generated images.
     save_all_snaps=True,  # Whether to save all snapshots or only the best one based on validation average accuracy.
     save_all_fakes=True,  # Whether to save all fake image grids or only the best one based on validation average accuracy.
@@ -468,6 +469,17 @@ def training_loop(
             except ImportError as err:
                 print("Skipping tfevents export:", err)
 
+    # Precompute complementary label distribution for generator (option 1 balancing).
+    gen_label_probs = None
+    if balance_class_labels:
+        K = training_set.label_dim
+        p = training_set.class_frequencies
+        probs = np.maximum(0.0, 1.0 / K - p)
+        total = probs.sum()
+        gen_label_probs = probs / total if total > 0 else np.ones(K, dtype=np.float32) / K
+        if rank == 0:
+            print(f"Generator label distribution (complementary): {np.round(gen_label_probs, 3)}")
+
     # Train.
     if rank == 0:
         print(f"Training for {total_kimg} kimg...")
@@ -497,6 +509,9 @@ def training_loop(
             n_gen = len(phases) * batch_size
             if uniform_class_labels:
                 class_ids = np.random.randint(0, training_set.label_dim, size=n_gen)
+                all_gen_c = np.eye(training_set.label_dim, dtype=np.float32)[class_ids]
+            elif balance_class_labels:
+                class_ids = np.random.choice(training_set.label_dim, size=n_gen, p=gen_label_probs)
                 all_gen_c = np.eye(training_set.label_dim, dtype=np.float32)[class_ids]
             else:
                 all_gen_c = training_set.get_label_batch(n_gen)

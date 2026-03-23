@@ -43,6 +43,7 @@ class Dataset(torch.utils.data.Dataset):
         self._use_label_map = use_label_map
         self._label_map = None
         self._rev_label_map = None
+        self._class_frequencies = None
 
         # Apply max_size.
         self._raw_idx = np.arange(self._raw_shape[0], dtype=np.int64)
@@ -78,6 +79,24 @@ class Dataset(torch.utils.data.Dataset):
                 self._label_map = {index: int(label) for index, label in enumerate(unique_labels)}
         return self._label_map
     
+    @property
+    def class_frequencies(self):
+        """Class frequencies p(c) in the dataset, shape (num_classes,), sums to 1."""
+        if self._class_frequencies is None:
+            raw_labels = self._get_raw_labels()[self._raw_idx]
+            K = self.label_shape[0]
+            if raw_labels.dtype == np.int64:
+                if self._use_label_map:
+                    rev_label_map = self.get_rev_label_map()
+                    mapped = np.array([rev_label_map[int(l)] for l in raw_labels], dtype=np.int64)
+                else:
+                    mapped = raw_labels
+                counts = np.bincount(mapped, minlength=K).astype(np.float32)
+            else:
+                counts = raw_labels.sum(axis=0).astype(np.float32)
+            self._class_frequencies = counts / counts.sum()
+        return self._class_frequencies
+
     def get_rev_label_map(self):
         if self._rev_label_map is None:
             label_map = self.get_label_map()
