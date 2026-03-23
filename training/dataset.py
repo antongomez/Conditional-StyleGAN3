@@ -42,6 +42,7 @@ class Dataset(torch.utils.data.Dataset):
         self._label_shape = None
         self._use_label_map = use_label_map
         self._label_map = None
+        self._rev_label_map = None
 
         # Apply max_size.
         self._raw_idx = np.arange(self._raw_shape[0], dtype=np.int64)
@@ -78,12 +79,24 @@ class Dataset(torch.utils.data.Dataset):
         return self._label_map
     
     def get_rev_label_map(self):
-        label_map = self.get_label_map()
-        if label_map:
-            rev_label_map = {v: k for k, v in label_map.items()}
-            return rev_label_map
-        else:
-            return None
+        if self._rev_label_map is None:
+            label_map = self.get_label_map()
+            if label_map:
+                self._rev_label_map = {v: k for k, v in label_map.items()}
+        return self._rev_label_map
+
+    def get_label_batch(self, n):
+        """Sample n random labels following the dataset distribution, vectorized."""
+        indices = np.random.randint(0, len(self), size=n)
+        raw_labels = self._get_raw_labels()[self._raw_idx[indices]]
+        if raw_labels.dtype == np.int64:
+            if self._use_label_map:
+                rev_label_map = self.get_rev_label_map()
+                mapped = np.array([rev_label_map[int(l)] for l in raw_labels], dtype=np.int64)
+            else:
+                mapped = raw_labels
+            return np.eye(self.label_shape[0], dtype=np.float32)[mapped]
+        return raw_labels.copy()
 
     def close(self):  # to be overridden by subclass
         pass

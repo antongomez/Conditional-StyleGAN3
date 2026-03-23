@@ -299,6 +299,15 @@ def training_loop(
     validation_set = dnnlib.util.construct_class_by_name(
         **validation_set_kwargs
     )  # subclass of training.dataset.Dataset
+    validation_set_sampler = DistributedSampler(
+        validation_set, num_replicas=num_gpus, rank=rank, shuffle=False
+    )
+    validation_set_loader = torch.utils.data.DataLoader(
+        dataset=validation_set,
+        sampler=validation_set_sampler,
+        batch_size=batch_size // num_gpus,
+        **data_loader_kwargs,
+    )
 
     if rank == 0:
         print()
@@ -484,23 +493,15 @@ def training_loop(
             all_gen_z = torch.randn([len(phases) * batch_size, G.z_dim], device=device)
             all_gen_z = [phase_gen_z.split(batch_gpu) for phase_gen_z in all_gen_z.split(batch_size)]
 
-            # Generate random class vectors
-            all_gen_c = []
+            # Generate random class vectors (vectorized)
+            n_gen = len(phases) * batch_size
             if uniform_class_labels:
-                # Generate random class vectors following a uniform distribution
-                class_ids = np.random.randint(0, training_set.label_dim, size=len(phases) * batch_size)
-                for cid in class_ids:
-                    vec = np.zeros(training_set.label_dim, dtype=np.float32)
-                    vec[cid] = 1.0
-                    all_gen_c.append(vec)
+                class_ids = np.random.randint(0, training_set.label_dim, size=n_gen)
+                all_gen_c = np.eye(training_set.label_dim, dtype=np.float32)[class_ids]
             else:
-                # Generate random class vectors following the training set distribution
-                all_gen_c = [
-                    training_set.get_label(np.random.randint(len(training_set)))
-                    for _ in range(len(phases) * batch_size)
-                ]
+                all_gen_c = training_set.get_label_batch(n_gen)
 
-            all_gen_c = torch.from_numpy(np.stack(all_gen_c)).pin_memory().to(device)
+            all_gen_c = torch.from_numpy(all_gen_c).pin_memory().to(device)
             all_gen_c = [phase_gen_c.split(batch_gpu) for phase_gen_c in all_gen_c.split(batch_size)]
 
         # Execute training phases.
@@ -634,20 +635,6 @@ def training_loop(
                 print("Evaluating validation set...", end="")
 
             start_time_val = time.time()
-
-            # Create a fresh DataLoader for validation to avoid worker issues
-            validation_set_sampler = DistributedSampler(
-                validation_set,
-                num_replicas=num_gpus,
-                rank=rank,
-                shuffle=False,
-            )
-            validation_set_loader = torch.utils.data.DataLoader(
-                dataset=validation_set,
-                sampler=validation_set_sampler,
-                batch_size=batch_size // num_gpus,
-                **data_loader_kwargs,
-            )
 
             with torch.no_grad():
                 for val_real_img, val_real_c in validation_set_loader:
