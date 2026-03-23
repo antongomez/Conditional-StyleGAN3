@@ -946,6 +946,9 @@ def training_loop(
                 with open(snapshot_base + ".pkl", "wb") as f:
                     pickle.dump(snapshot_data, f)
 
+                if not midpoint_saved and cur_nimg >= midpoint_checkpoint:
+                    midpoint_saved = True
+
         del snapshot_data  # conserve memory
 
         # Update logs.
